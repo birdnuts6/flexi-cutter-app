@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parametric Joint Flexi-Cutter</title>
+    <style>
+        body {
+            margin: 0; padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1a1a1a; color: #ffffff;
+            display: flex; height: 100vh; overflow: hidden;
+        }
+        #sidebar {
+            width: 340px; background-color: #262626; padding: 20px;
+            display: flex; flex-direction: column; gap: 15px;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.5); z-index: 10;
+        }
+        h2 { margin-top: 0; color: #ff7900; font-size: 20px; }
+        h3 { margin: 5px 0; font-size: 13px; color: #ff7900; text-transform: uppercase; }
+        .control-group { display: flex; flex-direction: column; gap: 5px; }
+        label { font-size: 12px; color: #ccc; font-weight: bold; }
+        input[type="file"] {
+            background: #333; padding: 8px; border-radius: 4px;
+            border: 1px dashed #555; cursor: pointer; color: #fff; font-size: 12px;
+        }
+        input[type="range"] { width: 100%; accent-color: #ff7900; }
+        button {
+            background-color: #ff7900; color: white; border: none;
+            padding: 12px; border-radius: 4px; font-weight: bold;
+            cursor: pointer; transition: background 0.2s;
+        }
+        button:hover { background-color: #e06a00; }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+        #canvas-container { flex-grow: 1; position: relative; }
+        #loading {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.9); padding: 20px; border-radius: 8px;
+            display: none; pointer-events: none; text-align: center;
+            border: 1px solid #ff7900; z-index: 100;
+        }
+    </style>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "manifold-3d": "https://unpkg.com/manifold-3d@3.0.1/manifold.js"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h2>Flexi Link Station</h2>
+        
+        <div class="control-group">
+            <label for="file-input-model">1. Upload Your Target Model:</label>
+            <input type="file" id="file-input-model" accept=".stl">
+        </div>
+
+        <hr style="border-color: #444; margin: 5px 0;">
+
+        <h3>2. Adjust Cutter Dimensions</h3>
+        <div class="control-group">
+            <label id="label-scale" for="input-scale">Cutter Scale: 100%</label>
+            <input type="range" id="input-scale" min="20" max="200" step="5" value="100" disabled>
+        </div>
+
+        <h3>3. Position Joint Link</h3>
+        <div class="control-group">
+            <label id="label-pos-x" for="input-pos-x">Position X: 0.00</label>
+            <input type="range" id="input-pos-x" min="-50" max="50" step="0.2" value="0" disabled>
+        </div>
+        <div class="control-group">
+            <label id="label-pos-y" for="input-pos-y">Position Y: 0.00</label>
+            <input type="range" id="input-pos-y" min="-50" max="50" step="0.2" value="0" disabled>
+        </div>
+        <div class="control-group">
+            <label id="label-pos-z" for="input-pos-z">Position Z: 0.00</label>
+            <input type="range" id="input-pos-z" min="-50" max="50" step="0.2" value="0" disabled>
+        </div>
+
+        <hr style="border-color: #444; margin: 5px 0;">
+
+        <button id="btn-cut" disabled>Apply Joint & Download</button>
+    </div>
+
+    <div id="canvas-container">
+        <div id="loading">Initializing Engine...</div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+        import { STLExporter } from 'three/addons/exporters/STLExporter.js';
+        import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+        import libmanifold from 'manifold-3d';
+
+        // Load the external data URI module
+        import { CUTTER_DATA_URI } from './cutter-data.js';
+
+        const wasmModule = await libmanifold();
+        wasmModule.setup();
+
+        let scene, camera, renderer, controls;
+        let mainModelGeom = null;
+        let cutterGeom = null;
+        
+        let visualModelMesh = null;
+        let visualCutterMesh = null;
+
+        const modelInput = document.getElementById('file-input-model');
+        const scaleInput = document.getElementById('input-scale');
+        const posX = document.getElementById('input-pos-x');
+        const posY = document.getElementById('input-pos-y');
+        const posZ = document.getElementById('input-pos-z');
+        const btnCut = document.getElementById('btn-cut');
+        const loadingDiv = document.getElementById('loading');
+
+        posX.addEventListener('input', (e) => {
+            document.getElementById('label-pos-x').innerText = `Position X: ${parseFloat(e.target.value).toFixed(2)}`;
+            if(visualCutterMesh) visualCutterMesh.position.x = parseFloat(e.target.value);
+        });
+        posY.addEventListener('input', (e) => {
+            document.getElementById('label-pos-y').innerText = `Position Y: ${parseFloat(e.target.value).toFixed(2)}`;
+            if(visualCutterMesh) visualCutterMesh.position.y = parseFloat(e.target.value);
+        });
+        posZ.addEventListener('input', (e) => {
+            document.getElementById('label-pos-z').innerText = `Position Z: ${parseFloat(e.target.value).toFixed(2)}`;
+            if(visualCutterMesh) visualCutterMesh.position.z = parseFloat(e.target.value);
+        });
+
+        scaleInput.addEventListener('input', (e) => {
+            const factor = parseFloat(e.target.
