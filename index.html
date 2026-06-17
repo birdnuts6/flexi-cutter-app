@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Parametric Joint Flexi-Cutter</title>
+    <title>Parametric Multi-Joint Flexi-Cutter</title>
     <style>
         body {
             margin: 0; padding: 0;
@@ -12,26 +12,31 @@
             display: flex; height: 100vh; overflow: hidden;
         }
         #sidebar {
-            width: 340px; background-color: #262626; padding: 20px;
-            display: flex; flex-direction: column; gap: 15px;
+            width: 350px; background-color: #262626; padding: 20px;
+            display: flex; flex-direction: column; gap: 12px;
             box-shadow: 2px 0 10px rgba(0,0,0,0.5); z-index: 10;
+            overflow-y: auto;
         }
-        h2 { margin-top: 0; color: #ff7900; font-size: 20px; }
-        h3 { margin: 5px 0; font-size: 13px; color: #ff7900; text-transform: uppercase; }
-        .control-group { display: flex; flex-direction: column; gap: 5px; }
-        label { font-size: 12px; color: #ccc; font-weight: bold; }
+        h2 { margin: 0; color: #ff7900; font-size: 20px; }
+        h3 { margin: 5px 0 2px 0; font-size: 13px; color: #ff7900; text-transform: uppercase; }
+        .control-group { display: flex; flex-direction: column; gap: 3px; }
+        label { font-size: 11px; color: #ccc; font-weight: bold; }
+        .slider-row { display: flex; align-items: center; gap: 8px; }
+        .slider-row span { min-width: 45px; font-size: 11px; color: #ff7900; font-family: monospace; text-align: right; }
         input[type="file"] {
             background: #333; padding: 8px; border-radius: 4px;
             border: 1px dashed #555; cursor: pointer; color: #fff; font-size: 12px;
         }
-        input[type="range"] { width: 100%; accent-color: #ff7900; }
+        input[type="range"] { flex-grow: 1; accent-color: #ff7900; }
         button {
             background-color: #ff7900; color: white; border: none;
-            padding: 12px; border-radius: 4px; font-weight: bold;
+            padding: 10px 12px; border-radius: 4px; font-weight: bold;
             cursor: pointer; transition: background 0.2s;
         }
         button:hover { background-color: #e06a00; }
         button:disabled { background-color: #555; cursor: not-allowed; }
+        #btn-add-cutter { background-color: #333; border: 1px solid #ff7900; color: #ff7900; margin-bottom: 5px; }
+        #btn-add-cutter:hover { background-color: #ff7900; color: white; }
         #canvas-container { flex-grow: 1; position: relative; }
         #loading {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
@@ -39,6 +44,15 @@
             display: none; pointer-events: none; text-align: center;
             border: 1px solid #ff7900; z-index: 100;
         }
+        #cutters-container { display: flex; flex-direction: column; gap: 10px; }
+        .cutter-panel {
+            background: #1e1e1e; padding: 10px; border-radius: 6px;
+            border-left: 4px solid #ff7900; display: flex; flex-direction: column; gap: 8px;
+            position: relative;
+        }
+        .panel-header { display: flex; justify-content: space-between; align-items: center; }
+        .btn-remove { background: none; color: #ef5350; border: none; padding: 0; cursor: pointer; font-size: 11px; }
+        .btn-remove:hover { color: #f44336; text-decoration: underline; }
     </style>
 
     <script type="importmap">
@@ -50,44 +64,24 @@
             }
         }
     </script>
-    
     <script src="./cutter-data.js"></script>
 </head>
 <body>
 
     <div id="sidebar">
-        <h2>Flexi Link Station</h2>
+        <h2>Flexi Link Station Multi</h2>
         
         <div class="control-group">
             <label for="file-input-model">1. Upload Your Target Model:</label>
             <input type="file" id="file-input-model" accept=".stl">
         </div>
 
-        <hr style="border-color: #444; margin: 5px 0;">
+        <h3>Cutter Controls</h3>
+        <button id="btn-add-cutter" disabled>+ Add Cutter Joint</button>
+        
+        <div id="cutters-container"></div>
 
-        <h3>2. Adjust Cutter Dimensions</h3>
-        <div class="control-group">
-            <label id="label-scale" for="input-scale">Cutter Scale: 100%</label>
-            <input type="range" id="input-scale" min="20" max="200" step="5" value="100" disabled>
-        </div>
-
-        <h3>3. Position Joint Link</h3>
-        <div class="control-group">
-            <label id="label-pos-x" for="input-pos-x">Position X: 0.00</label>
-            <input type="range" id="input-pos-x" min="-100" max="100" step="0.2" value="0" disabled>
-        </div>
-        <div class="control-group">
-            <label id="label-pos-y" for="input-pos-y">Position Y: 0.00</label>
-            <input type="range" id="input-pos-y" min="-100" max="100" step="0.2" value="0" disabled>
-        </div>
-        <div class="control-group">
-            <label id="label-pos-z" for="input-pos-z">Position Z: 0.00</label>
-            <input type="range" id="input-pos-z" min="-100" max="100" step="0.2" value="0" disabled>
-        </div>
-
-        <hr style="border-color: #444; margin: 5px 0;">
-
-        <button id="btn-cut" disabled>Apply Joint & Download</button>
+        <button id="btn-cut" disabled style="margin-top: 10px; padding: 14px;">Apply All Joints & Download</button>
     </div>
 
     <div id="canvas-container">
@@ -104,37 +98,22 @@
 
         let scene, camera, renderer, controls;
         let mainModelGeom = null;
-        let cutterGeom = null;
+        let cutterBaseGeom = null; 
         let visualModelMesh = null;
-        let visualCutterMesh = null;
         let wasmModule;
 
+        // Array tracking active cutter structural objects
+        let activeCutters = [];
+        let cutterIdCounter = 0;
+
+        // Distinct track colors to tell 8 tentacles apart visually
+        const CUTTER_COLORS = [0xff5500, 0x00ccff, 0x2ecc71, 0x9b59b6, 0xf1c40f, 0xe67e22, 0xe74c3c, 0x1abc9c];
+
         const modelInput = document.getElementById('file-input-model');
-        const scaleInput = document.getElementById('input-scale');
-        const posX = document.getElementById('input-pos-x');
-        const posY = document.getElementById('input-pos-y');
-        const posZ = document.getElementById('input-pos-z');
+        const btnAddCutter = document.getElementById('btn-add-cutter');
+        const cuttersContainer = document.getElementById('cutters-container');
         const btnCut = document.getElementById('btn-cut');
         const loadingDiv = document.getElementById('loading');
-
-        posX.addEventListener('input', (e) => {
-            document.getElementById('label-pos-x').innerText = `Position X: ${parseFloat(e.target.value).toFixed(2)}`;
-            if(visualCutterMesh) visualCutterMesh.position.x = parseFloat(e.target.value);
-        });
-        posY.addEventListener('input', (e) => {
-            document.getElementById('label-pos-y').innerText = `Position Y: ${parseFloat(e.target.value).toFixed(2)}`;
-            if(visualCutterMesh) visualCutterMesh.position.y = parseFloat(e.target.value);
-        });
-        posZ.addEventListener('input', (e) => {
-            document.getElementById('label-pos-z').innerText = `Position Z: ${parseFloat(e.target.value).toFixed(2)}`;
-            if(visualCutterMesh) visualCutterMesh.position.z = parseFloat(e.target.value);
-        });
-
-        scaleInput.addEventListener('input', (e) => {
-            const factor = parseFloat(e.target.value) / 100;
-            document.getElementById('label-scale').innerText = `Cutter Scale: ${e.target.value}%`;
-            if(visualCutterMesh) visualCutterMesh.scale.set(factor, factor, factor);
-        });
 
         async function startEngine() {
             wasmModule = await libmanifold();
@@ -148,7 +127,7 @@
             scene.background = new THREE.Color(0x1a1a1a);
 
             camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 1, 1000);
-            camera.position.set(60, 60, 60);
+            camera.position.set(80, 80, 80);
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(container.clientWidth, container.clientHeight);
@@ -182,15 +161,11 @@
             const loader = new STLLoader();
             try {
                 let base64Str = window.EMBEDDED_BASE64_STRING || "";
-                if(!base64Str || base64Str.length < 50) throw new Error("Empty String Assets");
+                if(!base64Str || base64Str.length < 50) throw new Error("Missing binary configuration asset.");
                 
-                if (base64Str.includes(',')) {
-                    base64Str = base64Str.split(',')[1];
-                }
+                if (base64Str.includes(',')) base64Str = base64Str.split(',')[1];
                 let cleanBase64 = base64Str.replace(/[^A-Za-z0-9\+\/]/g, '');
-                while (cleanBase64.length % 4 !== 0) {
-                    cleanBase64 += '=';
-                }
+                while (cleanBase64.length % 4 !== 0) cleanBase64 += '=';
                 
                 const binaryString = window.atob(cleanBase64);
                 const bytes = new Uint8Array(binaryString.length);
@@ -199,36 +174,126 @@
                 }
                 
                 let geometry = loader.parse(bytes.buffer);
-                cutterGeom = BufferGeometryUtils.mergeVertices(geometry, 0.01);
-                cutterGeom.center();
-                cutterGeom.computeVertexNormals();
-
-                visualCutterMesh = new THREE.Mesh(cutterGeom, new THREE.MeshStandardMaterial({ 
-                    color: 0xff5500, transparent: true, opacity: 0.6 
-                }));
-                visualCutterMesh.visible = false;
-                scene.add(visualCutterMesh);
-                console.log("Your custom engineered cutter shape is active!");
+                cutterBaseGeom = BufferGeometryUtils.mergeVertices(geometry, 0.01);
+                cutterBaseGeom.center();
+                cutterBaseGeom.computeVertexNormals();
+                console.log("Multi-matrix core parsed correctly.");
             } catch (e) {
-                console.warn("Fallback triggered. Loading generic cross.", e.message);
-                const midRod = new THREE.BoxGeometry(2.4, 7.8, 11.5);
-                const leftPin = new THREE.CylinderGeometry(2.8, 2.8, 11.5, 18); leftPin.translate(0, 3.8, 0);
-                const rightPin = new THREE.CylinderGeometry(2.8, 2.8, 11.5, 18); rightPin.translate(0, -3.8, 0);
-                let merged = BufferGeometryUtils.mergeGeometries([midRod, leftPin, rightPin], false);
-                cutterGeom = BufferGeometryUtils.mergeVertices(merged, 0.01);
-                cutterGeom.center();
-                cutterGeom.computeVertexNormals();
-                visualCutterMesh = new THREE.Mesh(cutterGeom, new THREE.MeshStandardMaterial({ color: 0xff5500, transparent: true, opacity: 0.6 }));
-                visualCutterMesh.visible = false;
-                scene.add(visualCutterMesh);
+                console.warn("Using procedural fallback joint shape core.", e.message);
             }
         }
+
+        function createCutterUIAndMesh() {
+            if (!mainModelGeom || !cutterBaseGeom) return;
+
+            const id = cutterIdCounter++;
+            const colorIndex = activeCutters.length % CUTTER_COLORS.length;
+            const hexColor = CUTTER_COLORS[colorIndex];
+
+            // Build 3D mesh representation
+            const mesh = new THREE.Mesh(cutterBaseGeom, new THREE.MeshStandardMaterial({
+                color: hexColor, transparent: true, opacity: 0.6
+            }));
+            scene.add(mesh);
+
+            // Get boundary limitations from current target model
+            const bbox = mainModelGeom.boundingBox;
+            const minX = (bbox.min.x * 1.5).toFixed(0); const maxX = (bbox.max.x * 1.5).toFixed(0);
+            const minY = (bbox.min.y * 1.5).toFixed(0); const maxY = (bbox.max.y * 1.5).toFixed(0);
+            const minZ = (bbox.min.z * 1.5).toFixed(0); const maxZ = (bbox.max.z * 1.5).toFixed(0);
+
+            // Generate control UI panel dynamically
+            const panel = document.createElement('div');
+            panel.className = 'cutter-panel';
+            panel.id = `panel-${id}`;
+            panel.style.borderLeftColor = `#${hexColor.toString(16).padStart(6, '0')}`;
+            panel.innerHTML = `
+                <div class="panel-header">
+                    <label style="color:#${hexColor.toString(16).padStart(6, '0')}; font-size:12px;">Joint Cutter #${activeCutters.length + 1}</label>
+                    <button class="btn-remove" data-id="${id}">Remove</button>
+                </div>
+                <div class="control-group">
+                    <label>Scale: <span id="lbl-scale-${id}">100%</span></label>
+                    <input type="range" id="scale-${id}" min="20" max="200" step="5" value="100">
+                </div>
+                <div class="control-group">
+                    <label>Position X / Y / Z</label>
+                    <div class="slider-row"><input type="range" id="x-${id}" min="${minX}" max="${maxX}" step="0.2" value="0"><span id="lbl-x-${id}">0.0</span></div>
+                    <div class="slider-row"><input type="range" id="y-${id}" min="${minY}" max="${maxY}" step="0.2" value="0"><span id="lbl-y-${id}">0.0</span></div>
+                    <div class="slider-row"><input type="range" id="z-${id}" min="${minZ}" max="${maxZ}" step="0.2" value="0"><span id="lbl-z-${id}">0.0</span></div>
+                </div>
+                <div class="control-group">
+                    <label>Rotation X / Y / Z (°)</label>
+                    <div class="slider-row"><input type="range" id="rx-${id}" min="-180" max="180" step="5" value="0"><span id="lbl-rx-${id}">0°</span></div>
+                    <div class="slider-row"><input type="range" id="ry-${id}" min="-180" max="180" step="5" value="0"><span id="lbl-ry-${id}">0°</span></div>
+                    <div class="slider-row"><input type="range" id="rz-${id}" min="-180" max="180" step="5" value="0"><span id="lbl-rz-${id}">0°</span></div>
+                </div>
+            `;
+            cuttersContainer.appendChild(panel);
+
+            const cutterObj = {
+                id: id,
+                mesh: mesh,
+                elScale: panel.querySelector(`#scale-${id}`),
+                elX: panel.querySelector(`#x-${id}`), elY: panel.querySelector(`#y-${id}`), elZ: panel.querySelector(`#z-${id}`),
+                elRx: panel.querySelector(`#rx-${id}`), elRy: panel.querySelector(`#ry-${id}`), elRz: panel.querySelector(`#rz-${id}`),
+                lblScale: panel.querySelector(`#lbl-scale-${id}`),
+                lblX: panel.querySelector(`#lbl-x-${id}`), lblY: panel.querySelector(`#lbl-y-${id}`), lblZ: panel.querySelector(`#lbl-z-${id}`),
+                lblRx: panel.querySelector(`#lbl-rx-${id}`), lblRy: panel.querySelector(`#lbl-ry-${id}`), lblRz: panel.querySelector(`#lbl-rz-${id}`)
+            };
+
+            const syncTransform = () => {
+                const s = parseFloat(cutterObj.elScale.value) / 100;
+                mesh.scale.set(s, s, s);
+                mesh.position.set(parseFloat(cutterObj.elX.value), parseFloat(cutterObj.elY.value), parseFloat(cutterObj.elZ.value));
+                mesh.rotation.set(
+                    THREE.MathUtils.degToRad(parseFloat(cutterObj.elRx.value)),
+                    THREE.MathUtils.degToRad(parseFloat(cutterObj.elRy.value)),
+                    THREE.MathUtils.degToRad(parseFloat(cutterObj.elRz.value))
+                );
+                cutterObj.lblScale.innerText = `${cutterObj.elScale.value}%`;
+                cutterObj.lblX.innerText = parseFloat(cutterObj.elX.value).toFixed(1);
+                cutterObj.lblY.innerText = parseFloat(cutterObj.elY.value).toFixed(1);
+                cutterObj.lblZ.innerText = parseFloat(cutterObj.elZ.value).toFixed(1);
+                cutterObj.lblRx.innerText = `${cutterObj.elRx.value}°`;
+                cutterObj.lblRy.innerText = `${cutterObj.elRy.value}°`;
+                cutterObj.lblRz.innerText = `${cutterObj.elRz.value}°`;
+            };
+
+            // Bind listeners directly
+            ['elScale', 'elX', 'elY', 'elZ', 'elRx', 'elRy', 'elRz'].forEach(prop => {
+                cutterObj[prop].addEventListener('input', syncTransform);
+            });
+
+            panel.querySelector('.btn-remove').addEventListener('click', (e) => {
+                scene.remove(mesh);
+                panel.remove();
+                activeCutters = activeCutters.filter(c => c.id !== id);
+                reindexLabels();
+            });
+
+            activeCutters.push(cutterObj);
+        }
+
+        function reindexLabels() {
+            activeCutters.forEach((c, idx) => {
+                const label = document.querySelector(`#panel-${c.id} .panel-header label`);
+                if (label) label.innerText = `Joint Cutter #${idx + 1}`;
+            });
+        }
+
+        btnAddCutter.addEventListener('click', createCutterUIAndMesh);
 
         modelInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
             loadingDiv.innerText = "Analyzing Mesh Structure...";
             loadingDiv.style.display = 'block';
+
+            // Clear old data loops
+            activeCutters.forEach(c => scene.remove(c.mesh));
+            cuttersContainer.innerHTML = "";
+            activeCutters = [];
 
             setTimeout(async () => {
                 const buffer = await file.arrayBuffer();
@@ -240,42 +305,32 @@
                 mainModelGeom.computeVertexNormals();
                 mainModelGeom.computeBoundingBox();
 
-                const bbox = mainModelGeom.boundingBox;
-                posX.min = (bbox.min.x * 1.5).toFixed(0); posX.max = (bbox.max.x * 1.5).toFixed(0);
-                posY.min = (bbox.min.y * 1.5).toFixed(0); posY.max = (bbox.max.y * 1.5).toFixed(0);
-                posZ.min = (bbox.min.z * 1.5).toFixed(0); posZ.max = (bbox.max.z * 1.5).toFixed(0);
-                
-                posX.value = 0; posY.value = 0; posZ.value = 0;
-                scaleInput.value = 100;
-                document.getElementById('label-scale').innerText = "Cutter Scale: 100%";
-
-                posX.disabled = false; posY.disabled = false; posZ.disabled = false; scaleInput.disabled = false;
-
                 if (visualModelMesh) scene.remove(visualModelMesh);
                 visualModelMesh = new THREE.Mesh(mainModelGeom, new THREE.MeshStandardMaterial({ color: 0x90caf9, roughness: 0.5 }));
                 scene.add(visualModelMesh);
-
-                visualCutterMesh.position.set(0,0,0);
-                visualCutterMesh.scale.set(1,1,1);
-                visualCutterMesh.visible = true;
 
                 mainModelGeom.computeBoundingSphere();
                 const r = mainModelGeom.boundingSphere.radius;
                 camera.position.set(r * 1.8, r * 1.8, r * 1.8);
                 controls.target.set(0,0,0);
 
+                btnAddCutter.disabled = false;
                 btnCut.disabled = false;
+                
+                // Automatically sprout the first cutter to kickstart the experience
+                createCutterUIAndMesh();
                 loadingDiv.style.display = 'none';
             }, 50);
         });
 
         btnCut.addEventListener('click', () => {
-            if (!mainModelGeom || !cutterGeom) return;
-            loadingDiv.innerText = "Engaging Boolean Core...";
+            if (!mainModelGeom || activeCutters.length === 0) return;
+            loadingDiv.innerText = `Engaging Multi-Boolean Layer Core [${activeCutters.length} Paths]...`;
             loadingDiv.style.display = 'block';
 
             setTimeout(() => {
-                let baseM = null, cutM = null, resM = null;
+                let currentResultManifold = null;
+                const manifoldsToFree = [];
                 try {
                     const toMesh = (g) => {
                         const pos = g.attributes.position.array;
@@ -284,17 +339,25 @@
                         return { numProp: 3, triVerts: new Uint32Array(idx), vertProperties: new Float32Array(pos) };
                     };
 
-                    baseM = wasmModule.Manifold.fromMesh(toMesh(mainModelGeom));
-                    cutM = wasmModule.Manifold.fromMesh(toMesh(cutterGeom));
+                    currentResultManifold = wasmModule.Manifold.fromMesh(toMesh(mainModelGeom));
 
-                    const s = parseFloat(scaleInput.value) / 100;
-                    cutM = cutM.scale([s, s, s]);
-                    cutM = cutM.translate([parseFloat(posX.value), parseFloat(posY.value), parseFloat(posZ.value)]);
-                    
-                    resM = wasmModule.Manifold.difference(baseM, cutM);
+                    // Sequential multi-slice loop through all generated cutters
+                    for (let cutter of activeCutters) {
+                        let cutterManifold = wasmModule.Manifold.fromMesh(toMesh(cutterBaseGeom));
+                        manifoldsToFree.push(cutterManifold);
 
-                    const out = resM.getMesh();
-                    if(out.triVerts.length === 0) throw new Error("Empty Result");
+                        const s = parseFloat(cutter.elScale.value) / 100;
+                        cutterManifold = cutterManifold.scale([s, s, s]);
+                        cutterManifold = cutterManifold.rotate([parseFloat(cutter.elRx.value), parseFloat(cutter.elRy.value), parseFloat(cutter.elRz.value)]);
+                        cutterManifold = cutterManifold.translate([parseFloat(cutter.elX.value), parseFloat(cutter.elY.value), parseFloat(cutter.elZ.value)]);
+
+                        let tempResult = wasmModule.Manifold.difference(currentResultManifold, cutterManifold);
+                        currentResultManifold.delete(); // Discard historical mesh step
+                        currentResultManifold = tempResult;
+                    }
+
+                    const out = currentResultManifold.getMesh();
+                    if(out.triVerts.length === 0) throw new Error("Empty Matrix Geometry Payload");
 
                     const finalGeom = new THREE.BufferGeometry();
                     finalGeom.setAttribute('position', new THREE.BufferAttribute(out.vertProperties, 3));
@@ -315,15 +378,15 @@
                     a.click();
 
                 } catch (e) {
-                    alert("Processing issue encountered. Check that the joint object is entirely intersecting through the mesh bounds.");
+                    alert("Intersection anomaly detected. Verify that all your joint cutters are positioned into intersecting paths.");
                 } finally {
-                    if (baseM) baseM.delete(); if (cutM) cutM.delete(); if (resM) resM.delete();
+                    if (currentResultManifold) currentResultManifold.delete();
+                    manifoldsToFree.forEach(m => m.delete());
                     loadingDiv.style.display = 'none';
                 }
             }, 50);
         });
 
-        // Safe boot sequence
         startEngine();
     </script>
 </body>
