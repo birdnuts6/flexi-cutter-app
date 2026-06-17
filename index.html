@@ -176,19 +176,29 @@
         function loadCutterFromMemory() {
             const loader = new STLLoader();
             try {
-                const base64Str = typeof EMBEDDED_BASE64_STRING !== 'undefined' ? EMBEDDED_BASE64_STRING : "";
+                let base64Str = typeof EMBEDDED_BASE64_STRING !== 'undefined' ? EMBEDDED_BASE64_STRING : "";
                 if(!base64Str || base64Str.length < 50) throw new Error("Empty String");
                 
-                const pureBase64 = base64Str.includes(',') ? base64Str.split(',')[1] : base64Str;
-		const cleanBase64 = pureBase64.replace(/[\s\r\n]+/g, '');
-		const binaryString = window.atob(cleanBase64);
-                const binaryString = window.atob(cleanbase64());
+                // Clean out any headers, data prefixes, spaces, and hidden line breaks
+                if (base64Str.includes(',')) {
+                    base64Str = base64Str.split(',')[1];
+                }
+                let cleanBase64 = base64Str.replace(/[^A-Za-z0-9\+\/]/g, '');
+                
+                // Automatically fix missing Base64 padding if the string got cut short
+                while (cleanBase64.length % 4 !== 0) {
+                    cleanBase64 += '=';
+                }
+                
+                const binaryString = window.atob(cleanBase64);
                 const bytes = new Uint8Array(binaryString.length);
                 for (let i = 0; i < binaryString.length; i++) {
                     bytes[i] = binaryString.charCodeAt(i);
                 }
                 
                 let geometry = loader.parse(bytes.buffer);
+                if (!geometry || geometry.attributes.position.count === 0) throw new Error("Invalid Geometry");
+                
                 cutterGeom = BufferGeometryUtils.mergeVertices(geometry, 0.01);
                 cutterGeom.center();
                 cutterGeom.computeVertexNormals();
@@ -200,7 +210,7 @@
                 scene.add(visualCutterMesh);
                 console.log("Your custom engineered cutter shape is active!");
             } catch (e) {
-                console.warn("Loading standard fallback block.");
+                console.warn("Loading standard fallback block. Error details:", e.message);
                 const midRod = new THREE.BoxGeometry(2.4, 7.8, 11.5);
                 const leftPin = new THREE.CylinderGeometry(2.8, 2.8, 11.5, 18); leftPin.translate(0, 3.8, 0);
                 const rightPin = new THREE.CylinderGeometry(2.8, 2.8, 11.5, 18); rightPin.translate(0, -3.8, 0);
