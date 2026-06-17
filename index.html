@@ -116,6 +116,13 @@
         const btnCut = document.getElementById('btn-cut');
         const loadingDiv = document.getElementById('loading');
 
+        // Render loop defined early so it can be safely called anywhere
+        function animate() {
+            requestAnimationFrame(animate);
+            if (controls) controls.update();
+            if (renderer && scene && camera) renderer.render(scene, camera);
+        }
+
         posX.addEventListener('input', (e) => {
             document.getElementById('label-pos-x').innerText = `Position X: ${parseFloat(e.target.value).toFixed(2)}`;
             if(visualCutterMesh) visualCutterMesh.position.x = parseFloat(e.target.value);
@@ -228,9 +235,11 @@
                 visualModelMesh = new THREE.Mesh(mainModelGeom, new THREE.MeshStandardMaterial({ color: 0x90caf9, roughness: 0.5 }));
                 scene.add(visualModelMesh);
 
-                visualCutterMesh.position.set(0,0,0);
-                visualCutterMesh.scale.set(1,1,1);
-                visualCutterMesh.visible = true;
+                if(visualCutterMesh) {
+                    visualCutterMesh.position.set(0,0,0);
+                    visualCutterMesh.scale.set(1,1,1);
+                    visualCutterMesh.visible = true;
+                }
 
                 mainModelGeom.computeBoundingSphere();
                 const r = mainModelGeom.boundingSphere.radius;
