@@ -324,11 +324,11 @@
                         return { numProp: 3, triVerts: new Uint32Array(idx), vertProperties: new Float32Array(pos) };
                     };
 
-                    // FIXED: Instantiate the raw objects via direct instance mapping
-                    let baseM = new wasmModule.Manifold(toMesh(mainModelGeom));
+                    // CORRECTED: Call lowercase manifold directly as required by the library version namespace factory
+                    let baseM = wasmModule.manifold(toMesh(mainModelGeom));
 
                     for (let cutter of activeCutters) {
-                        let cutM = new wasmModule.Manifold(toMesh(cutterBaseGeom));
+                        let cutM = wasmModule.manifold(toMesh(cutterBaseGeom));
 
                         const s = parseFloat(cutter.elScale.value) / 100;
                         cutM = cutM.scale([s, s, s]);
