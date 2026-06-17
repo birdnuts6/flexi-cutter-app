@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Parametric Multi-Joint Flexi-Cutter</title>
+    <title>Parametric Multi-Joint Flexi-Cutter Pro</title>
     <style>
         body {
             margin: 0; padding: 0;
@@ -102,11 +102,9 @@
         let visualModelMesh = null;
         let wasmModule;
 
-        // Array tracking active cutter structural objects
         let activeCutters = [];
         let cutterIdCounter = 0;
 
-        // Distinct track colors to tell 8 tentacles apart visually
         const CUTTER_COLORS = [0xff5500, 0x00ccff, 0x2ecc71, 0x9b59b6, 0xf1c40f, 0xe67e22, 0xe74c3c, 0x1abc9c];
 
         const modelInput = document.getElementById('file-input-model');
@@ -161,7 +159,7 @@
             const loader = new STLLoader();
             try {
                 let base64Str = window.EMBEDDED_BASE64_STRING || "";
-                if(!base64Str || base64Str.length < 50) throw new Error("Missing binary configuration asset.");
+                if(!base64Str || base64Str.length < 50) throw new Error("Asset structural anomaly.");
                 
                 if (base64Str.includes(',')) base64Str = base64Str.split(',')[1];
                 let cleanBase64 = base64Str.replace(/[^A-Za-z0-9\+\/]/g, '');
@@ -177,9 +175,9 @@
                 cutterBaseGeom = BufferGeometryUtils.mergeVertices(geometry, 0.01);
                 cutterBaseGeom.center();
                 cutterBaseGeom.computeVertexNormals();
-                console.log("Multi-matrix core parsed correctly.");
+                console.log("Custom core mesh verified.");
             } catch (e) {
-                console.warn("Using procedural fallback joint shape core.", e.message);
+                console.warn("Using baseline fallback geometry matrix core.", e.message);
             }
         }
 
@@ -190,19 +188,16 @@
             const colorIndex = activeCutters.length % CUTTER_COLORS.length;
             const hexColor = CUTTER_COLORS[colorIndex];
 
-            // Build 3D mesh representation
             const mesh = new THREE.Mesh(cutterBaseGeom, new THREE.MeshStandardMaterial({
                 color: hexColor, transparent: true, opacity: 0.6
             }));
             scene.add(mesh);
 
-            // Get boundary limitations from current target model
             const bbox = mainModelGeom.boundingBox;
             const minX = (bbox.min.x * 1.5).toFixed(0); const maxX = (bbox.max.x * 1.5).toFixed(0);
             const minY = (bbox.min.y * 1.5).toFixed(0); const maxY = (bbox.max.y * 1.5).toFixed(0);
             const minZ = (bbox.min.z * 1.5).toFixed(0); const maxZ = (bbox.max.z * 1.5).toFixed(0);
 
-            // Generate control UI panel dynamically
             const panel = document.createElement('div');
             panel.className = 'cutter-panel';
             panel.id = `panel-${id}`;
@@ -260,12 +255,11 @@
                 cutterObj.lblRz.innerText = `${cutterObj.elRz.value}°`;
             };
 
-            // Bind listeners directly
             ['elScale', 'elX', 'elY', 'elZ', 'elRx', 'elRy', 'elRz'].forEach(prop => {
                 cutterObj[prop].addEventListener('input', syncTransform);
             });
 
-            panel.querySelector('.btn-remove').addEventListener('click', (e) => {
+            panel.querySelector('.btn-remove').addEventListener('click', () => {
                 scene.remove(mesh);
                 panel.remove();
                 activeCutters = activeCutters.filter(c => c.id !== id);
@@ -290,7 +284,6 @@
             loadingDiv.innerText = "Analyzing Mesh Structure...";
             loadingDiv.style.display = 'block';
 
-            // Clear old data loops
             activeCutters.forEach(c => scene.remove(c.mesh));
             cuttersContainer.innerHTML = "";
             activeCutters = [];
@@ -317,7 +310,6 @@
                 btnAddCutter.disabled = false;
                 btnCut.disabled = false;
                 
-                // Automatically sprout the first cutter to kickstart the experience
                 createCutterUIAndMesh();
                 loadingDiv.style.display = 'none';
             }, 50);
@@ -331,6 +323,8 @@
             setTimeout(() => {
                 let currentResultManifold = null;
                 const manifoldsToFree = [];
+                let successfulCuts = 0;
+
                 try {
                     const toMesh = (g) => {
                         const pos = g.attributes.position.array;
@@ -341,53 +335,6 @@
 
                     currentResultManifold = wasmModule.Manifold.fromMesh(toMesh(mainModelGeom));
 
-                    // Sequential multi-slice loop through all generated cutters
+                    // Sequential safe slice loop execution
                     for (let cutter of activeCutters) {
-                        let cutterManifold = wasmModule.Manifold.fromMesh(toMesh(cutterBaseGeom));
-                        manifoldsToFree.push(cutterManifold);
-
-                        const s = parseFloat(cutter.elScale.value) / 100;
-                        cutterManifold = cutterManifold.scale([s, s, s]);
-                        cutterManifold = cutterManifold.rotate([parseFloat(cutter.elRx.value), parseFloat(cutter.elRy.value), parseFloat(cutter.elRz.value)]);
-                        cutterManifold = cutterManifold.translate([parseFloat(cutter.elX.value), parseFloat(cutter.elY.value), parseFloat(cutter.elZ.value)]);
-
-                        let tempResult = wasmModule.Manifold.difference(currentResultManifold, cutterManifold);
-                        currentResultManifold.delete(); // Discard historical mesh step
-                        currentResultManifold = tempResult;
-                    }
-
-                    const out = currentResultManifold.getMesh();
-                    if(out.triVerts.length === 0) throw new Error("Empty Matrix Geometry Payload");
-
-                    const finalGeom = new THREE.BufferGeometry();
-                    finalGeom.setAttribute('position', new THREE.BufferAttribute(out.vertProperties, 3));
-                    finalGeom.setIndex(new THREE.BufferAttribute(out.triVerts, 1));
-                    finalGeom.computeVertexNormals();
-
-                    scene.remove(visualModelMesh);
-                    visualModelMesh = new THREE.Mesh(finalGeom, new THREE.MeshStandardMaterial({ color: 0x4caf50, roughness: 0.4 }));
-                    scene.add(visualModelMesh);
-
-                    const exporter = new STLExporter();
-                    const stlBytes = exporter.parse(visualModelMesh, { binary: true });
-                    const blob = new Blob([stlBytes], { type: 'application/octet-stream' });
-                    
-                    const a = document.createElement('a');
-                    a.href = URL.createObjectURL(blob);
-                    a.download = 'articulated_flexi_output.stl';
-                    a.click();
-
-                } catch (e) {
-                    alert("Intersection anomaly detected. Verify that all your joint cutters are positioned into intersecting paths.");
-                } finally {
-                    if (currentResultManifold) currentResultManifold.delete();
-                    manifoldsToFree.forEach(m => m.delete());
-                    loadingDiv.style.display = 'none';
-                }
-            }, 50);
-        });
-
-        startEngine();
-    </script>
-</body>
-</html>
+                        let
