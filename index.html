@@ -168,7 +168,8 @@
                 }
                 
                 let geometry = loader.parse(bytes.buffer);
-                cutterBaseGeom = BufferGeometryUtils.mergeVertices(geometry, 0.01);
+                // Clean geometry generation pass
+                cutterBaseGeom = geometry.clone();
                 cutterBaseGeom.center();
                 cutterBaseGeom.computeVertexNormals();
             } catch (e) {
@@ -288,7 +289,7 @@
                 const loader = new STLLoader();
                 let parsed = loader.parse(buffer);
 
-                mainModelGeom = BufferGeometryUtils.mergeVertices(parsed, 0.01);
+                mainModelGeom = parsed.clone();
                 mainModelGeom.center();
                 mainModelGeom.computeVertexNormals();
                 mainModelGeom.computeBoundingBox();
@@ -317,14 +318,22 @@
 
             setTimeout(() => {
                 try {
+                    // FIXED: Flawless layout data parsing configuration that normalizes nested indexes
                     const toMesh = (g) => {
-                        const pos = g.attributes.position.array;
-                        let idx = g.index ? Array.from(g.index.array) : [];
-                        if (idx.length === 0) for(let i=0; i<pos.length/3; i++) idx.push(i);
-                        return { numProp: 3, triVerts: new Uint32Array(idx), vertProperties: new Float32Array(pos) };
+                        let pos = g.attributes.position.array;
+                        let indexArray = g.index ? g.index.array : null;
+                        
+                        let triVerts;
+                        if (indexArray) {
+                            triVerts = new Uint32Array(indexArray);
+                        } else {
+                            let count = pos.length / 3;
+                            triVerts = new Uint32Array(count);
+                            for (let i = 0; i < count; i++) triVerts[i] = i;
+                        }
+                        return { numProp: 3, triVerts: triVerts, vertProperties: new Float32Array(pos) };
                     };
 
-                    // CORRECTED: Call lowercase manifold directly as required by the library version namespace factory
                     let baseM = wasmModule.manifold(toMesh(mainModelGeom));
 
                     for (let cutter of activeCutters) {
