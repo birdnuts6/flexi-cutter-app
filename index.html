@@ -65,7 +65,6 @@
         }
     </script>
     <script>
-        // Force the browser to bypass any stored cache layers for the data asset file
         const script = document.createElement('script');
         script.src = `./cutter-data.js?v=${Date.now()}`;
         document.head.appendChild(script);
@@ -150,7 +149,6 @@
             dLight.position.set(1, 1, 1);
             scene.add(dLight);
 
-            // Give the dynamic cache-busted script element a microsecond to lock into global scope
             setTimeout(loadCutterFromMemory, 100);
 
             window.addEventListener('resize', () => {
@@ -323,6 +321,9 @@
 
             setTimeout(() => {
                 try {
+                    // Extract core constructor classes out of the active WebAssembly context
+                    const { Manifold, Mesh } = wasmModule;
+
                     const toMesh = (g) => {
                         let pos = g.attributes.position.array;
                         let indexArray = g.index ? g.index.array : null;
@@ -335,43 +336,21 @@
                             triVerts = new Uint32Array(count);
                             for (let i = 0; i < count; i++) triVerts[i] = i;
                         }
-                        return { numProp: 3, triVerts: triVerts, vertProperties: new Float32Array(pos) };
+                        return new Mesh({ numProp: 3, triVerts: triVerts, vertProperties: new Float32Array(pos) });
                     };
 
-                    // Absolute foolproof multi-version factory route targeting any possible namespace variation
-                    let baseM;
-                    const meshData = toMesh(mainModelGeom);
-                    
-                    if (wasmModule.Manifold && typeof wasmModule.Manifold.fromMesh === 'function') {
-                        baseM = wasmModule.Manifold.fromMesh(meshData);
-                    } else if (typeof wasmModule.manifold === 'function') {
-                        baseM = wasmModule.manifold(meshData);
-                    } else if (typeof wasmModule.Manifold === 'function') {
-                        baseM = wasmModule.Manifold(meshData);
-                    } else {
-                        baseM = new wasmModule.Manifold(meshData);
-                    }
+                    // FIXED: Properly instantiated using native destructured constructor definitions
+                    let baseM = new Manifold(toMesh(mainModelGeom));
 
                     for (let cutter of activeCutters) {
-                        let cutM;
-                        const cutterData = toMesh(cutterBaseGeom);
-                        
-                        if (wasmModule.Manifold && typeof wasmModule.Manifold.fromMesh === 'function') {
-                            cutM = wasmModule.Manifold.fromMesh(cutterData);
-                        } else if (typeof wasmModule.manifold === 'function') {
-                            cutM = wasmModule.manifold(cutterData);
-                        } else if (typeof wasmModule.Manifold === 'function') {
-                            cutM = wasmModule.Manifold(cutterData);
-                        } else {
-                            cutM = new wasmModule.Manifold(cutterData);
-                        }
+                        let cutM = new Manifold(toMesh(cutterBaseGeom));
 
                         const s = parseFloat(cutter.elScale.value) / 100;
                         cutM = cutM.scale([s, s, s]);
                         cutM = cutM.rotate([parseFloat(cutter.elRx.value), parseFloat(cutter.elRy.value), parseFloat(cutter.elRz.value)]);
                         cutM = cutM.translate([parseFloat(cutter.elX.value), parseFloat(cutter.elY.value), parseFloat(cutter.elZ.value)]);
                         
-                        let tempRes = wasmModule.Manifold.difference(baseM, cutM);
+                        let tempRes = Manifold.difference(baseM, cutM);
                         baseM.delete();
                         cutM.delete();
                         baseM = tempRes;
