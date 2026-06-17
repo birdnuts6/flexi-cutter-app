@@ -324,10 +324,11 @@
                         return { numProp: 3, triVerts: new Uint32Array(idx), vertProperties: new Float32Array(pos) };
                     };
 
-                    let baseM = wasmModule.Manifold.fromMesh(toMesh(mainModelGeom));
+                    // FIXED: Remapped initialization directly to the global instance method namespace
+                    let baseM = wasmModule.fromMesh(toMesh(mainModelGeom));
 
                     for (let cutter of activeCutters) {
-                        let cutM = wasmModule.Manifold.fromMesh(toMesh(cutterBaseGeom));
+                        let cutM = wasmModule.fromMesh(toMesh(cutterBaseGeom));
 
                         const s = parseFloat(cutter.elScale.value) / 100;
                         cutM = cutM.scale([s, s, s]);
