@@ -172,9 +172,12 @@
                 }
                 
                 let geometry = loader.parse(bytes.buffer);
-                cutterBaseGeom = geometry.clone();
+                
+                // Force vertex welding pass immediately upon parsing memory data strings
+                cutterBaseGeom = BufferGeometryUtils.mergeVertices(geometry, 0.001);
                 cutterBaseGeom.center();
                 cutterBaseGeom.computeVertexNormals();
+                cutterBaseGeom.computeBoundingBox();
             } catch (e) {
                 console.error("Cutter structural compilation missing.", e);
             }
@@ -292,7 +295,8 @@
                 const loader = new STLLoader();
                 let parsed = loader.parse(buffer);
 
-                mainModelGeom = parsed.clone();
+                // Force welding tracking rules across the user uploaded target model geometry skin
+                mainModelGeom = BufferGeometryUtils.mergeVertices(parsed, 0.001);
                 mainModelGeom.center();
                 mainModelGeom.computeVertexNormals();
                 mainModelGeom.computeBoundingBox();
@@ -321,9 +325,9 @@
 
             setTimeout(() => {
                 try {
-                    // Extract core constructor classes out of the active WebAssembly context
                     const { Manifold, Mesh } = wasmModule;
 
+                    // Unpack and extract the nested elements into a standard index mapping array layout
                     const toMesh = (g) => {
                         let pos = g.attributes.position.array;
                         let indexArray = g.index ? g.index.array : null;
@@ -339,7 +343,6 @@
                         return new Mesh({ numProp: 3, triVerts: triVerts, vertProperties: new Float32Array(pos) });
                     };
 
-                    // FIXED: Properly instantiated using native destructured constructor definitions
                     let baseM = new Manifold(toMesh(mainModelGeom));
 
                     for (let cutter of activeCutters) {
