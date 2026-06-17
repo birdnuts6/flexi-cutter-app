@@ -64,7 +64,12 @@
             }
         }
     </script>
-    <script src="./cutter-data.js"></script>
+    <script>
+        // Force the browser to bypass any stored cache layers for the data asset file
+        const script = document.createElement('script');
+        script.src = `./cutter-data.js?v=${Date.now()}`;
+        document.head.appendChild(script);
+    </script>
 </head>
 <body>
 
@@ -145,7 +150,8 @@
             dLight.position.set(1, 1, 1);
             scene.add(dLight);
 
-            loadCutterFromMemory();
+            // Give the dynamic cache-busted script element a microsecond to lock into global scope
+            setTimeout(loadCutterFromMemory, 100);
 
             window.addEventListener('resize', () => {
                 camera.aspect = container.clientWidth / container.clientHeight;
@@ -332,23 +338,33 @@
                         return { numProp: 3, triVerts: triVerts, vertProperties: new Float32Array(pos) };
                     };
 
-                    // FIXED: Flexible self-healing factory wrapper targeting any initialization syntax rule
-                    const createManifold = (meshData) => {
-                        if (typeof wasmModule.manifold === 'function') {
-                            return wasmModule.manifold(meshData);
-                        } else if (typeof wasmModule.Manifold === 'function') {
-                            return wasmModule.Manifold(meshData);
-                        } else if (wasmModule.Manifold && typeof wasmModule.Manifold.fromMesh === 'function') {
-                            return wasmModule.Manifold.fromMesh(meshData);
-                        } else {
-                            return new wasmModule.Manifold(meshData);
-                        }
-                    };
-
-                    let baseM = createManifold(toMesh(mainModelGeom));
+                    // Absolute foolproof multi-version factory route targeting any possible namespace variation
+                    let baseM;
+                    const meshData = toMesh(mainModelGeom);
+                    
+                    if (wasmModule.Manifold && typeof wasmModule.Manifold.fromMesh === 'function') {
+                        baseM = wasmModule.Manifold.fromMesh(meshData);
+                    } else if (typeof wasmModule.manifold === 'function') {
+                        baseM = wasmModule.manifold(meshData);
+                    } else if (typeof wasmModule.Manifold === 'function') {
+                        baseM = wasmModule.Manifold(meshData);
+                    } else {
+                        baseM = new wasmModule.Manifold(meshData);
+                    }
 
                     for (let cutter of activeCutters) {
-                        let cutM = createManifold(toMesh(cutterBaseGeom));
+                        let cutM;
+                        const cutterData = toMesh(cutterBaseGeom);
+                        
+                        if (wasmModule.Manifold && typeof wasmModule.Manifold.fromMesh === 'function') {
+                            cutM = wasmModule.Manifold.fromMesh(cutterData);
+                        } else if (typeof wasmModule.manifold === 'function') {
+                            cutM = wasmModule.manifold(cutterData);
+                        } else if (typeof wasmModule.Manifold === 'function') {
+                            cutM = wasmModule.Manifold(cutterData);
+                        } else {
+                            cutM = new wasmModule.Manifold(cutterData);
+                        }
 
                         const s = parseFloat(cutter.elScale.value) / 100;
                         cutM = cutM.scale([s, s, s]);
