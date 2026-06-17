@@ -159,11 +159,8 @@
             const loader = new STLLoader();
             try {
                 let base64Str = window.EMBEDDED_BASE64_STRING || "";
-                if(!base64Str || base64Str.length < 50) throw new Error("Empty string variable asset.");
-                
+                if(!base64Str || base64Str.length < 50) throw new Error("Empty memory string.");
                 if (base64Str.includes(',')) base64Str = base64Str.split(',')[1];
-                
-                // Lightning fast regex cleanup to prevent infinite parsing loops
                 let cleanBase64 = base64Str.trim().replace(/[^A-Za-z0-9\+\/\=]/g, '');
                 
                 const binaryString = window.atob(cleanBase64);
@@ -173,14 +170,25 @@
                 }
                 
                 let geometry = loader.parse(bytes.buffer);
-                cutterBaseGeom = BufferGeometryUtils.mergeVertices(geometry, 0.01);
+                cutterBaseGeom = BufferGeometryUtils.mergeVertices(geometry, 0.001);
                 cutterBaseGeom.center();
                 cutterBaseGeom.computeVertexNormals();
-                console.log("Cutter core safely locked in.");
+                cutterBaseGeom.computeBoundingBox();
+                
+                // Normalizes internal sizing anomalies so the geometric core matches standard millimeter dimensions
+                const size = new THREE.Vector3();
+                cutterBaseGeom.boundingBox.getSize(size);
+                const maxDim = Math.max(size.x, size.y, size.z);
+                if (maxDim > 0 && (maxDim < 1 || maxDim > 500)) {
+                    const normFactor = 15 / maxDim;
+                    cutterBaseGeom.scale(normFactor, normFactor, normFactor);
+                    cutterBaseGeom.center();
+                    cutterBaseGeom.computeBoundingBox();
+                }
+                console.log("Cutter background asset successfully loaded and geometry normalized.");
             } catch (e) {
-                console.warn("Fallback triggered:", e.message);
-                // Simple default backup shape to ensure app ALWAYS stays awake
-                const midRod = new THREE.BoxGeometry(2.4, 7.8, 11.5);
+                console.warn("Fallback geometric core deployed:", e.message);
+                const midRod = new THREE.BoxGeometry(3, 8, 12);
                 cutterBaseGeom = BufferGeometryUtils.mergeVertices(midRod, 0.01);
                 cutterBaseGeom.center();
                 cutterBaseGeom.computeVertexNormals();
@@ -215,7 +223,7 @@
                 </div>
                 <div class="control-group">
                     <label>Scale: <span id="lbl-scale-${id}">100%</span></label>
-                    <input type="range" id="scale-${id}" min="20" max="200" step="5" value="100">
+                    <input type="range" id="scale-${id}" min="20" max="400" step="5" value="100">
                 </div>
                 <div class="control-group">
                     <label>Position X / Y / Z</label>
@@ -319,7 +327,7 @@
                     
                     createCutterUIAndMesh();
                 } catch(err) {
-                    alert("Error reading file mesh. Ensure it is a standard binary or ASCII .stl format.");
+                    alert("Error reading file mesh. Ensure it is a standard .stl format.");
                 } finally {
                     loadingDiv.style.display = 'none';
                 }
@@ -334,7 +342,6 @@
             setTimeout(() => {
                 let currentResultManifold = null;
                 const manifoldsToFree = [];
-                let successfulCuts = 0;
 
                 try {
                     const toMesh = (g) => {
@@ -345,6 +352,7 @@
                     };
 
                     currentResultManifold = wasmModule.Manifold.fromMesh(toMesh(mainModelGeom));
+                    const baseVertexCount = currentResultManifold.getMesh().vertProperties.length;
 
                     for (let cutter of activeCutters) {
                         let cutterManifold = null;
@@ -355,26 +363,29 @@
                             const s = parseFloat(cutter.elScale.value) / 100;
                             cutterManifold = cutterManifold.scale([s, s, s]);
                             cutterManifold = cutterManifold.rotate([parseFloat(cutter.elRx.value), parseFloat(cutter.elRy.value), parseFloat(cutter.elRz.value)]);
-                            cutterManifold = cutterManifold.translate([parseFloat(cutter.elX.value), parseFloat(cutter.elY.value), parseFloat(cutter.elZ.value)]);
+                            
+                            const posX = parseFloat(cutter.elX.value) + 0.001;
+                            const posY = parseFloat(cutter.elY.value) + 0.001;
+                            const posZ = parseFloat(cutter.elZ.value) + 0.001;
+                            cutterManifold = cutterManifold.translate([posX, posY, posZ]);
 
                             let tempResult = wasmModule.Manifold.difference(currentResultManifold, cutterManifold);
                             
                             const testMesh = tempResult.getMesh();
                             if (testMesh.triVerts.length === 0) {
                                 tempResult.delete();
-                                throw new Error("Skipping non-intersecting cutter path alignment.");
+                                throw new Error("Intersection missing standard boundaries.");
                             }
 
                             currentResultManifold.delete(); 
                             currentResultManifold = tempResult; 
-                            successfulCuts++;
                         } catch (innerError) {
-                            console.warn(innerError.message);
+                            console.warn("Cutter layer skipped:", innerError.message);
                         }
                     }
 
                     const out = currentResultManifold.getMesh();
-                    if(out.triVerts.length === 0) throw new Error("Empty processing output execution matrix.");
+                    if(out.triVerts.length === 0) throw new Error("Empty output execution matrix.");
 
                     const finalGeom = new THREE.BufferGeometry();
                     finalGeom.setAttribute('position', new THREE.BufferAttribute(out.vertProperties, 3));
@@ -395,15 +406,7 @@
                     a.click();
 
                 } catch (e) {
-                    const exporter = new STLExporter();
-                    if (visualModelMesh) {
-                        const stlBytes = exporter.parse(visualModelMesh, { binary: true });
-                        const blob = new Blob([stlBytes], { type: 'application/octet-stream' });
-                        const a = document.createElement('a');
-                        a.href = URL.createObjectURL(blob);
-                        a.download = 'flexi_output_fallback.stl';
-                        a.click();
-                    }
+                    alert("A calculation issue occurred. Verify that your joint scale is adjusted large enough to pass completely through both surfaces of the target mesh walls.");
                 } finally {
                     if (currentResultManifold) currentResultManifold.delete();
                     manifoldsToFree.forEach(m => m.delete());
