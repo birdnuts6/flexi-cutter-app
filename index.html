@@ -168,7 +168,6 @@
                 }
                 
                 let geometry = loader.parse(bytes.buffer);
-                // Clean geometry generation pass
                 cutterBaseGeom = geometry.clone();
                 cutterBaseGeom.center();
                 cutterBaseGeom.computeVertexNormals();
@@ -318,7 +317,6 @@
 
             setTimeout(() => {
                 try {
-                    // FIXED: Flawless layout data parsing configuration that normalizes nested indexes
                     const toMesh = (g) => {
                         let pos = g.attributes.position.array;
                         let indexArray = g.index ? g.index.array : null;
@@ -334,10 +332,23 @@
                         return { numProp: 3, triVerts: triVerts, vertProperties: new Float32Array(pos) };
                     };
 
-                    let baseM = wasmModule.manifold(toMesh(mainModelGeom));
+                    // FIXED: Flexible self-healing factory wrapper targeting any initialization syntax rule
+                    const createManifold = (meshData) => {
+                        if (typeof wasmModule.manifold === 'function') {
+                            return wasmModule.manifold(meshData);
+                        } else if (typeof wasmModule.Manifold === 'function') {
+                            return wasmModule.Manifold(meshData);
+                        } else if (wasmModule.Manifold && typeof wasmModule.Manifold.fromMesh === 'function') {
+                            return wasmModule.Manifold.fromMesh(meshData);
+                        } else {
+                            return new wasmModule.Manifold(meshData);
+                        }
+                    };
+
+                    let baseM = createManifold(toMesh(mainModelGeom));
 
                     for (let cutter of activeCutters) {
-                        let cutM = wasmModule.manifold(toMesh(cutterBaseGeom));
+                        let cutM = createManifold(toMesh(cutterBaseGeom));
 
                         const s = parseFloat(cutter.elScale.value) / 100;
                         cutM = cutM.scale([s, s, s]);
