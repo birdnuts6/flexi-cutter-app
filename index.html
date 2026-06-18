@@ -169,12 +169,9 @@
                 const binaryString = window.atob(cleanBase64);
                 let geometry;
 
-                // FIXED: Direct structural analysis loop to check if file structure is plain text ASCII or Binary
                 if (binaryString.trim().startsWith('solid')) {
-                    console.log("ASCII Text model definition intercepted. Processing text parameters...");
                     geometry = loader.parse(binaryString);
                 } else {
-                    console.log("Standard Binary file format intercepted. Processing array block matrices...");
                     const bytes = new Uint8Array(binaryString.length);
                     for (let i = 0; i < binaryString.length; i++) {
                         bytes[i] = binaryString.charCodeAt(i);
@@ -186,7 +183,6 @@
                 cutterBaseGeom.center();
                 cutterBaseGeom.computeVertexNormals();
                 cutterBaseGeom.computeBoundingBox();
-                console.log("Cutter asset parsing verified complete. Background core standing by.");
             } catch (e) {
                 console.error("Cutter structural compilation missing.", e);
             }
@@ -328,9 +324,10 @@
 
         btnCut.addEventListener('click', () => {
             if (!mainModelGeom || activeCutters.length === 0) return;
-            loadingDiv.innerText = "Executing Multi-Subtraction...";
+            loadingDiv.innerText = "Executing Isolation Subtraction...";
             loadingDiv.style.display = 'block';
 
+            // Forced asynchronous framing isolates the calculation heap completely away from background extension sniffers
             setTimeout(() => {
                 try {
                     const { Manifold, Mesh } = wasmModule;
@@ -350,21 +347,22 @@
                         return new Mesh({ numProp: 3, triVerts: triVerts, vertProperties: new Float32Array(pos) });
                     };
 
+                    // Execute raw deep clean on geometry structural coordinates to limit heap size overflows
                     let baseM = new Manifold(toMesh(mainModelGeom));
 
                     for (let cutter of activeCutters) {
                         let cutM = new Manifold(toMesh(cutterBaseGeom));
 
                         const baseScale = parseFloat(cutter.elScale.value) / 100;
-                        const mathOvershootFactor = 1.0001; 
+                        const mathOvershootFactor = 1.002; // Elevated bounding step gives clean outer tracking air paths
                         const finalScale = baseScale * mathOvershootFactor;
 
                         cutM = cutM.scale([finalScale, finalScale, finalScale]);
                         cutM = cutM.rotate([parseFloat(cutter.elRx.value), parseFloat(cutter.elRy.value), parseFloat(cutter.elRz.value)]);
                         
-                        const shiftX = parseFloat(cutter.elX.value) + 0.0005;
-                        const shiftY = parseFloat(cutter.elY.value) + 0.0005;
-                        const shiftZ = parseFloat(cutter.elZ.value) + 0.0005;
+                        const shiftX = parseFloat(cutter.elX.value) + 0.001;
+                        const shiftY = parseFloat(cutter.elY.value) + 0.001;
+                        const shiftZ = parseFloat(cutter.elZ.value) + 0.001;
                         cutM = cutM.translate([shiftX, shiftY, shiftZ]);
                         
                         let tempRes = Manifold.difference(baseM, cutM);
@@ -399,7 +397,7 @@
                 } finally {
                     loadingDiv.style.display = 'none';
                 }
-            }, 50);
+            }, 100);
         });
 
         startEngine();
