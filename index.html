@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Standalone Flexi-Cutter Station</title>
+    <title>Parametric Automated Flexi-Cutter Station</title>
     <style>
         body {
             margin: 0; padding: 0;
@@ -63,7 +63,11 @@
             }
         }
     </script>
-    <script src="./cutter-data.js"></script>
+    <script>
+        const script = document.createElement('script');
+        script.src = `./cutter-data.js?v=${Date.now()}`;
+        document.head.appendChild(script);
+    </script>
 </head>
 <body>
 
@@ -316,58 +320,66 @@
 
             setTimeout(() => {
                 try {
-                    // FIXED: Replaced external dependency with a native, pure JS bounding-box slice algorithm
                     let mainPositions = visualModelMesh.geometry.attributes.position.array;
                     let keptTriangles = [];
 
-                    // Loop through every single triangle face inside the loaded model array
-                    for (let i = 0; i < mainPositions.length; i += 9) {
-                        let ax = mainPositions[i],   ay = mainPositions[i+1], az = mainPositions[i+2];
-                        let bx = mainPositions[i+3], by = mainPositions[i+4], bz = mainPositions[i+5];
-                        let cx = mainPositions[i+6], cy = mainPositions[i+7], cz = mainPositions[i+8];
+                    // Extract the base dimensions of the target cutter object
+                    cutterBaseGeom.computeBoundingBox();
+                    let rawBox = cutterBaseGeom.boundingBox;
+                    let halfWidthX = (rawBox.max.x - rawBox.min.x) / 2;
+                    let halfWidthY = (rawBox.max.y - rawBox.min.y) / 2;
+                    let halfWidthZ = (rawBox.max.z - rawBox.min.z) / 2;
 
-                        // Compute the center coordinates of this face to cross-verify positioning boundaries
-                        let faceCenterX = (ax + bx + cx) / 3;
-                        let faceCenterY = (ay + by + cy) / 3;
-                        let faceCenterZ = (az + bz + cz) / 3;
+                    // Setup three working vector fields to process matrix operations without garbage accumulation
+                    let pA = new THREE.Vector3();
+                    let pB = new THREE.Vector3();
+                    let pC = new THREE.Vector3();
+                    let faceCenter = new THREE.Vector3();
+                    let localCenter = new THREE.Vector3();
+                    let inverseMatrix = new THREE.Matrix4();
+
+                    for (let i = 0; i < mainPositions.length; i += 9) {
+                        pA.set(mainPositions[i], mainPositions[i+1], mainPositions[i+2]);
+                        pB.set(mainPositions[i+3], mainPositions[i+4], mainPositions[i+5]);
+                        pC.set(mainPositions[i+6], mainPositions[i+7], mainPositions[i+8]);
+
+                        // Compute current global triangle center coordinate
+                        faceCenter.set(
+                            (pA.x + pB.x + pC.x) / 3,
+                            (pA.y + pB.y + pC.y) / 3,
+                            (pA.z + pB.z + pC.z) / 3
+                        );
 
                         let insideAnyCutter = false;
 
                         for (let cutter of activeCutters) {
-                            // Calculate the localized boundaries of each slider box panel dynamically
-                            let cPos = cutter.mesh.position;
-                            let cScale = cutter.mesh.scale;
+                            // FIXED: Force full World Matrix compilation to track complex 3D rotation vectors perfectly
+                            cutter.mesh.updateMatrixWorld(true);
                             
-                            // Extract basic bounding footprint dimensions from the compiled template shape
-                            cutterBaseGeom.computeBoundingBox();
-                            let rawBox = cutterBaseGeom.boundingBox;
-                            
-                            let halfWidthX = ((rawBox.max.x - rawBox.min.x) / 2) * cScale.x;
-                            let halfWidthY = ((rawBox.max.y - rawBox.min.y) / 2) * cScale.y;
-                            let halfWidthZ = ((rawBox.max.z - rawBox.min.z) / 2) * cScale.z;
+                            // Invert cutter matrix to transform world points into cutter's local space
+                            inverseMatrix.copy(cutter.mesh.matrixWorld).invert();
+                            localCenter.copy(faceCenter).applyMatrix4(inverseMatrix);
 
-                            // Run a flat, error-free check to verify if the model center line sits inside the void block
+                            // Run a local space check against native boundaries (scaled bounds are now handled natively by the matrix!)
                             if (
-                                Math.abs(faceCenterX - cPos.x) <= halfWidthX &&
-                                Math.abs(faceCenterY - cPos.y) <= halfWidthY &&
-                                Math.abs(faceCenterZ - cPos.z) <= halfWidthZ
+                                Math.abs(localCenter.x) <= halfWidthX &&
+                                Math.abs(localCenter.y) <= halfWidthY &&
+                                Math.abs(localCenter.z) <= halfWidthZ
                             ) {
                                 insideAnyCutter = true;
                                 break;
                             }
                         }
 
-                        // If the triangle face doesn't collide with any active cutter block, keep it intact
                         if (!insideAnyCutter) {
                             keptTriangles.push(
-                                ax, ay, az,
-                                bx, by, bz,
-                                cx, cy, cz
+                                pA.x, pA.y, pA.z,
+                                pB.x, pB.y, pB.z,
+                                pC.x, pC.y, pC.z
                             );
                         }
                     }
 
-                    // Build a fresh geometry matrix out of the surviving polygons
                     const finalGeom = new THREE.BufferGeometry();
                     finalGeom.setAttribute('position', new THREE.Float32BufferAttribute(keptTriangles, 3));
                     finalGeom.computeVertexNormals();
@@ -386,7 +398,7 @@
                     a.click();
 
                 } catch (e) {
-                    console.error("Spatial filter calculation sequence breakdown.", e);
+                    console.error("Spatial transformation sequence breakdown.", e);
                 } finally {
                     loadingDiv.style.display = 'none';
                 }
