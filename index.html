@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Parametric Automated Flexi-Cutter Station</title>
+    <title>Multi-Threaded Parametric Flexi Station</title>
     <style>
         body {
             margin: 0; padding: 0;
@@ -63,11 +63,7 @@
             }
         }
     </script>
-    <script>
-        const script = document.createElement('script');
-        script.src = `./cutter-data.js?v=${Date.now()}`;
-        document.head.appendChild(script);
-    </script>
+    <script src="./cutter-data.js"></script>
 </head>
 <body>
 
@@ -90,6 +86,60 @@
     <div id="canvas-container">
         <div id="loading">Initializing Engine...</div>
     </div>
+
+    <script id="worker-script" type="application/javascript">
+        self.onmessage = function(e) {
+            const { mainPositions, cutters, halfWidthX, halfWidthY, halfWidthZ } = e.data;
+            let keptTriangles = [];
+            const totalLength = mainPositions.length;
+
+            // Highly optimized math loop running completely isolated from the browser tab UI thread
+            for (let i = 0; i < totalLength; i += 9) {
+                let ax = mainPositions[i],   ay = mainPositions[i+1], az = mainPositions[i+2];
+                let bx = mainPositions[i+3], by = mainPositions[i+4], bz = mainPositions[i+5];
+                let cx = mainPositions[i+6], cy = mainPositions[i+7], cz = mainPositions[i+8];
+
+                let faceCenterX = (ax + bx + cx) / 3;
+                let faceCenterY = (ay + by + cy) / 3;
+                let faceCenterZ = (az + bz + cz) / 3;
+
+                let insideAnyCutter = false;
+
+                for (let c of cutters) {
+                    // Re-calculate the spatial distance vectors inside the worker context
+                    let dx = faceCenterX - c.x;
+                    let dy = faceCenterY - c.y;
+                    let dz = faceCenterZ - c.z;
+
+                    // Unpack matrix rotations manually using fast scalar math
+                    let rx = dx * c.m00 + dy * c.m10 + dz * c.m20;
+                    let ry = dx * c.m01 + dy * c.m11 + dz * c.m21;
+                    let rz = dx * c.m02 + dy * c.m12 + dz * c.m22;
+
+                    if (
+                        Math.abs(rx) <= halfWidthX &&
+                        Math.abs(ry) <= halfWidthY &&
+                        Math.abs(rz) <= halfWidthZ
+                    ) {
+                        insideAnyCutter = true;
+                        break;
+                    }
+                }
+
+                if (!insideAnyCutter) {
+                    keptTriangles.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+                }
+
+                // Send progress updates periodically to prevent tab hanging signs
+                if (i % 9000 === 0) {
+                    self.postMessage({ type: 'progress', percent: Math.round((i / totalLength) * 100) });
+                }
+            }
+
+            // Return the finished arrays back to the master page interface loop
+            self.postMessage({ type: 'complete', keptTriangles: new Float32Array(keptTriangles) });
+        };
+    </script>
 
     <script type="module">
         import * as THREE from 'three';
@@ -175,7 +225,7 @@
                 cutterBaseGeom.computeVertexNormals();
                 cutterBaseGeom.computeBoundingBox();
             } catch (e) {
-                console.error("Cutter loader parse breakdown.", e);
+                console.error("Cutter loader breakdown.", e);
             }
         }
 
@@ -315,70 +365,47 @@
 
         btnCut.addEventListener('click', () => {
             if (!visualModelMesh || activeCutters.length === 0) return;
-            loadingDiv.innerText = "Executing Core Spatial Subtraction...";
+            loadingDiv.innerText = "Background Thread Active: Processing 0%...";
             loadingDiv.style.display = 'block';
 
-            setTimeout(() => {
-                try {
-                    let mainPositions = visualModelMesh.geometry.attributes.position.array;
-                    let keptTriangles = [];
+            // Extract core structural variables from global mesh trackers
+            let mainPositions = visualModelMesh.geometry.attributes.position.array;
+            
+            cutterBaseGeom.computeBoundingBox();
+            let rawBox = cutterBaseGeom.boundingBox;
+            let halfWidthX = (rawBox.max.x - rawBox.min.x) / 2;
+            let halfWidthY = (rawBox.max.y - rawBox.min.y) / 2;
+            let halfWidthZ = (rawBox.max.z - rawBox.min.z) / 2;
 
-                    // Extract the base dimensions of the target cutter object
-                    cutterBaseGeom.computeBoundingBox();
-                    let rawBox = cutterBaseGeom.boundingBox;
-                    let halfWidthX = (rawBox.max.x - rawBox.min.x) / 2;
-                    let halfWidthY = (rawBox.max.y - rawBox.min.y) / 2;
-                    let halfWidthZ = (rawBox.max.z - rawBox.min.z) / 2;
+            // Prepare matrix calculations to hand off to worker array blocks
+            let cutterMatrixData = activeCutters.map(cutter => {
+                cutter.mesh.updateMatrixWorld(true);
+                let inverse = new THREE.Matrix4().copy(cutter.mesh.matrixWorld).invert();
+                let e = inverse.elements;
+                return {
+                    x: cutter.mesh.position.x, y: cutter.mesh.position.y, z: cutter.mesh.position.z,
+                    m00: e[0], m01: e[1], m02: e[2],
+                    m10: e[4], m11: e[5], m12: e[6],
+                    m20: e[8], m21: e[9], m22: e[10]
+                };
+            });
 
-                    // Setup three working vector fields to process matrix operations without garbage accumulation
-                    let pA = new THREE.Vector3();
-                    let pB = new THREE.Vector3();
-                    let pC = new THREE.Vector3();
-                    let faceCenter = new THREE.Vector3();
-                    let localCenter = new THREE.Vector3();
-                    let inverseMatrix = new THREE.Matrix4();
+            // Initialize background Web Worker inline blob context
+            const blob = new Blob([document.getElementById('worker-script').textContent], { type: 'application/javascript' });
+            const worker = new Worker(URL.createObjectURL(blob));
 
-                    for (let i = 0; i < mainPositions.length; i += 9) {
-                        pA.set(mainPositions[i], mainPositions[i+1], mainPositions[i+2]);
-                        pB.set(mainPositions[i+3], mainPositions[i+4], mainPositions[i+5]);
-                        pC.set(mainPositions[i+6], mainPositions[i+7], mainPositions[i+8]);
+            // Ship array structures directly into background core computing lane
+            worker.postMessage({
+                mainPositions: mainPositions,
+                cutters: cutterMatrixData,
+                halfWidthX: halfWidthX, halfWidthY: halfWidthY, halfWidthZ: halfWidthZ
+            });
 
-                        // Compute current global triangle center coordinate
-                        faceCenter.set(
-                            (pA.x + pB.x + pC.x) / 3,
-                            (pA.y + pB.y + pC.y) / 3,
-                            (pA.z + pB.z + pC.z) / 3
-                        );
-
-                        let insideAnyCutter = false;
-
-                        for (let cutter of activeCutters) {
-                            // FIXED: Force full World Matrix compilation to track complex 3D rotation vectors perfectly
-                            cutter.mesh.updateMatrixWorld(true);
-                            
-                            // Invert cutter matrix to transform world points into cutter's local space
-                            inverseMatrix.copy(cutter.mesh.matrixWorld).invert();
-                            localCenter.copy(faceCenter).applyMatrix4(inverseMatrix);
-
-                            // Run a local space check against native boundaries (scaled bounds are now handled natively by the matrix!)
-                            if (
-                                Math.abs(localCenter.x) <= halfWidthX &&
-                                Math.abs(localCenter.y) <= halfWidthY &&
-                                Math.abs(localCenter.z) <= halfWidthZ
-                            ) {
-                                insideAnyCutter = true;
-                                break;
-                            }
-                        }
-
-                        if (!insideAnyCutter) {
-                            keptTriangles.push(
-                                pA.x, pA.y, pA.z,
-                                pB.x, pB.y, pB.z,
-                                pC.x, pC.y, pC.z
-                            );
-                        }
-                    }
+            worker.onmessage = function(msg) {
+                if (msg.data.type === 'progress') {
+                    loadingDiv.innerText = `Background Thread Active: Processing ${msg.data.percent}%...`;
+                } else if (msg.data.type === 'complete') {
+                    const { keptTriangles } = msg.data;
 
                     const finalGeom = new THREE.BufferGeometry();
                     finalGeom.setAttribute('position', new THREE.Float32BufferAttribute(keptTriangles, 3));
@@ -390,19 +417,17 @@
 
                     const exporter = new STLExporter();
                     const stlBytes = exporter.parse(visualModelMesh, { binary: true });
-                    const blob = new Blob([stlBytes], { type: 'application/octet-stream' });
+                    const downloadBlob = new Blob([stlBytes], { type: 'application/octet-stream' });
                     
                     const a = document.createElement('a');
-                    a.href = URL.createObjectURL(blob);
-                    a.download = 'clean_flexi_output.stl';
+                    a.href = URL.createObjectURL(downloadBlob);
+                    a.download = 'multi_threaded_flexi_output.stl';
                     a.click();
 
-                } catch (e) {
-                    console.error("Spatial transformation sequence breakdown.", e);
-                } finally {
+                    worker.terminate();
                     loadingDiv.style.display = 'none';
                 }
-            }, 50);
+            };
         });
 
         initThree();
