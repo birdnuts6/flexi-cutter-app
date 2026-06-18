@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Parametric Automated Flexi-Cutter Station</title>
+    <title>Multi-Threaded Parametric Flexi Station</title>
     <style>
         body {
             margin: 0; padding: 0;
@@ -59,8 +59,7 @@
         {
             "imports": {
                 "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
-                "three-bvh-csg": "https://unpkg.com/three-bvh-csg@0.0.16/build/index.module.js"
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
             }
         }
     </script>
@@ -92,13 +91,94 @@
         <div id="loading">Initializing Engine...</div>
     </div>
 
+    <script id="worker-script" type="application/javascript">
+        self.onmessage = function(e) {
+            const { mainPositions, cutterPositions, cutters } = e.data;
+            let keptTriangles = [];
+            const totalLength = mainPositions.length;
+            const cutterLength = cutterPositions.length;
+
+            for (let i = 0; i < totalLength; i += 9) {
+                let ax = mainPositions[i],   ay = mainPositions[i+1], az = mainPositions[i+2];
+                let bx = mainPositions[i+3], by = mainPositions[i+4], bz = mainPositions[i+5];
+                let cx = mainPositions[i+6], cy = mainPositions[i+7], cz = mainPositions[i+8];
+
+                let faceCenterX = (ax + bx + cx) / 3;
+                let faceCenterY = (ay + by + cy) / 3;
+                let faceCenterZ = (az + bz + cz) / 3;
+
+                let insideAnyCutter = false;
+
+                for (let c of cutters) {
+                    // Step 1: Shift current face center point to the cutter's localized space layout
+                    let dx = faceCenterX - c.x;
+                    let dy = faceCenterY - c.y;
+                    let dz = faceCenterZ - c.z;
+
+                    let rx = dx * c.m00 + dy * c.m10 + dz * c.m20;
+                    let ry = dx * c.m01 + dy * c.m11 + dz * c.m21;
+                    let rz = dx * c.m02 + dy * c.m12 + dz * c.m22;
+
+                    // Step 2: Run a ray-projection check directly against the cutter's true structural triangles
+                    let intersectionCount = 0;
+
+                    for (let j = 0; j < cutterLength; j += 9) {
+                        let cax = cutterPositions[j],   cay = cutterPositions[j+1], caz = cutterPositions[j+2];
+                        let cbx = cutterPositions[j+3], cby = cutterPositions[j+4], cbz = cutterPositions[j+5];
+                        let ccx = cutterPositions[j+6], ccy = cutterPositions[j+7], ccz = cutterPositions[j+8];
+
+                        // Ray-triangle test matching the precise geometric skin of the joint
+                        let edge1x = cbx - cax, edge1y = cby - cay, edge1z = cbz - caz;
+                        let edge2x = ccx - cax, edge2y = ccy - cay, edge2z = ccz - caz;
+                        
+                        // Cross product vector tracking matrices
+                        let pvecX = (ry * edge2z) - (rz * edge2y);
+                        let pvecY = (rz * edge2x) - (rx * edge2z);
+                        let pvecZ = (rx * edge2y) - (ry * edge2x);
+                        let det = (edge1x * pvecX) + (edge1y * pvecY) + (edge1z * pvecZ);
+
+                        if (Math.abs(det) < 0.000001) continue;
+
+                        let invDet = 1.0 / det;
+                        let tvecX = rx - cax, tvecY = ry - cay, tvecZ = rz - caz;
+                        let u = ((tvecX * pvecX) + (tvecY * pvecY) + (tvecZ * pvecZ)) * invDet;
+                        if (u < 0.0 || u > 1.0) continue;
+
+                        let qvecX = (tvecY * edge1z) - (tvecZ * edge1y);
+                        let qvecY = (tvecZ * edge1x) - (tvecX * edge1z);
+                        let qvecZ = (tvecX * edge1y) - (tvecY * edge1x);
+                        let v = ((rx * qvecX) + (ry * qvecY) + (rz * qvecZ)) * invDet;
+                        if (v < 0.0 || u + v > 1.0) continue;
+
+                        let t = ((edge2x * qvecX) + (edge2y * qvecY) + (edge2z * qvecZ)) * invDet;
+                        if (t > 0.00001) intersectionCount++;
+                    }
+
+                    // If ray counts confirm the coordinate point lands deep inside the exact STL skin, flag it
+                    if (intersectionCount % 2 !== 0) {
+                        insideAnyCutter = true;
+                        break;
+                    }
+                }
+
+                if (!insideAnyCutter) {
+                    keptTriangles.push(ax, ay, az, bx, by, bz, cx, cy, cz);
+                }
+
+                if (i % 9000 === 0) {
+                    self.postMessage({ type: 'progress', percent: Math.round((i / totalLength) * 100) });
+                }
+            }
+
+            self.postMessage({ type: 'complete', keptTriangles: new Float32Array(keptTriangles) });
+        };
+    </script>
+
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { STLLoader } from 'three/addons/loaders/STLLoader.js';
         import { STLExporter } from 'three/addons/exporters/STLExporter.js';
-        import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
-        import { CSG } from 'three-bvh-csg';
 
         let scene, camera, renderer, controls;
         let mainModelGeom = null;
@@ -169,9 +249,9 @@
                 cutterBaseGeom.center();
                 cutterBaseGeom.computeVertexNormals();
                 cutterBaseGeom.computeBoundingBox();
-                console.log("Detailed Cutter Geometry completely parsed.");
+                console.log("Cutter base loaded into core scene loop.");
             } catch (e) {
-                console.error("Cutter compilation breakdown.", e);
+                console.error("Cutter loader breakdown.", e);
             }
         }
 
@@ -310,30 +390,45 @@
 
         btnCut.addEventListener('click', () => {
             if (!visualModelMesh || activeCutters.length === 0) return;
-            loadingDiv.innerText = "Executing Direct Solid Subtraction...";
+            loadingDiv.innerText = "Background Thread Active: Processing 0%...";
             loadingDiv.style.display = 'block';
 
-            setTimeout(() => {
-                try {
-                    // Initialize the ultra-fast modern BVH CSG evaluator matrix
-                    let evaluator = new CSG();
-                    
-                    // Convert main model mesh directly into a solid tracking object
-                    visualModelMesh.updateMatrixWorld(true);
-                    let resultMesh = visualModelMesh.clone();
+            let mainPositions = visualModelMesh.geometry.attributes.position.array;
+            let cutterPositions = cutterBaseGeom.attributes.position.array;
 
-                    for (let cutter of activeCutters) {
-                        cutter.mesh.updateMatrixWorld(true);
-                        
-                        // Execute high-speed native solid polygon difference calculation
-                        resultMesh = evaluator.evaluate(resultMesh, cutter.mesh, 'SUBTRACT');
-                    }
+            let cutterMatrixData = activeCutters.map(cutter => {
+                cutter.mesh.updateMatrixWorld(true);
+                let inverse = new THREE.Matrix4().copy(cutter.mesh.matrixWorld).invert();
+                let e = inverse.elements;
+                return {
+                    x: cutter.mesh.position.x, y: cutter.mesh.position.y, z: cutter.mesh.position.z,
+                    m00: e[0], m01: e[1], m02: e[2],
+                    m10: e[4], m11: e[5], m12: e[6],
+                    m20: e[8], m21: e[9], m22: e[10]
+                };
+            });
 
-                    // Apply updated structural textures and re-render visual mesh
-                    resultMesh.material = new THREE.MeshStandardMaterial({ color: 0x4caf50, roughness: 0.4 });
-                    
+            const blob = new Blob([document.getElementById('worker-script').textContent], { type: 'application/javascript' });
+            const worker = new Worker(URL.createObjectURL(blob));
+
+            worker.postMessage({
+                mainPositions: mainPositions,
+                cutterPositions: cutterPositions,
+                cutters: cutterMatrixData
+            });
+
+            worker.onmessage = function(msg) {
+                if (msg.data.type === 'progress') {
+                    loadingDiv.innerText = `Background Thread Active: Processing ${msg.data.percent}%...`;
+                } else if (msg.data.type === 'complete') {
+                    const { keptTriangles } = msg.data;
+
+                    const finalGeom = new THREE.BufferGeometry();
+                    finalGeom.setAttribute('position', new THREE.Float32BufferAttribute(keptTriangles, 3));
+                    finalGeom.computeVertexNormals();
+
                     scene.remove(visualModelMesh);
-                    visualModelMesh = resultMesh;
+                    visualModelMesh = new THREE.Mesh(finalGeom, new THREE.MeshStandardMaterial({ color: 0x4caf50, roughness: 0.4 }));
                     scene.add(visualModelMesh);
 
                     const exporter = new STLExporter();
@@ -342,15 +437,13 @@
                     
                     const a = document.createElement('a');
                     a.href = URL.createObjectURL(downloadBlob);
-                    a.download = 'perfect_flexi_output.stl';
+                    a.download = 'multi_threaded_flexi_output.stl';
                     a.click();
 
-                } catch (e) {
-                    console.error("Solid subtraction sequence breakdown.", e);
-                } finally {
+                    worker.terminate();
                     loadingDiv.style.display = 'none';
                 }
-            }, 50);
+            };
         });
 
         initThree();
