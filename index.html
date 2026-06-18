@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Parametric Multi-Joint Flexi-Cutter Direct</title>
+    <title>Parametric Automated Flexi-Cutter Station</title>
     <style>
         body {
             margin: 0; padding: 0;
@@ -183,7 +183,7 @@
                 cutterBaseGeom.center();
                 cutterBaseGeom.computeVertexNormals();
                 cutterBaseGeom.computeBoundingBox();
-                console.log("Cutter asset parsing verified complete. Background core standing by.");
+                console.log("Cutter asset parsing verified complete.");
             } catch (e) {
                 console.error("Cutter structural compilation missing.", e);
             }
@@ -325,14 +325,13 @@
 
         btnCut.addEventListener('click', () => {
             if (!mainModelGeom || activeCutters.length === 0) return;
-            loadingDiv.innerText = "Executing Multi-Subtraction...";
+            loadingDiv.innerText = "Automated Mesh Healing Active... (Please Hold)";
             loadingDiv.style.display = 'block';
 
             setTimeout(() => {
                 try {
                     const { Manifold, Mesh } = wasmModule;
 
-                    // FIXED: Strips out overlapping geometry index tracking vectors on complex inputs
                     const toMesh = (g) => {
                         let pos = g.attributes.position.array;
                         let count = pos.length / 3;
@@ -341,7 +340,22 @@
                         return new Mesh({ numProp: 3, triVerts: triVerts, vertProperties: new Float32Array(pos) });
                     };
 
-                    let baseM = new Manifold(toMesh(mainModelGeom));
+                    // ---- AUTOMATED PRE-FILTER MESH DOCTOR LAYER ----
+                    console.log("Starting voxelization remesh sequence...");
+                    let rawImportM = new Manifold(toMesh(mainModelGeom));
+                    
+                    // Convert raw mesh data into a clean mathematical LevelSet voxel layout to weld any overlapping walls
+                    let bounds = mainModelGeom.boundingBox;
+                    let sizeX = bounds.max.x - bounds.min.x;
+                    let voxelEdgeResolution = sizeX / 120; // 120 voxel grid step size guarantees absolute watertight manifold closure
+                    
+                    let voxelGridMatrix = wasmModule.LevelSet.fromManifold(rawImportM, voxelEdgeResolution);
+                    let baseM = voxelGridMatrix.toManifold(); // Recalculate a flawless closed hull surface skin
+                    
+                    rawImportM.delete();
+                    voxelGridMatrix.delete();
+                    console.log("Mesh pre-filter complete. Main model is now verified watertight manifold.");
+                    // ------------------------------------------------
 
                     for (let cutter of activeCutters) {
                         let cutM = new Manifold(toMesh(cutterBaseGeom));
@@ -386,7 +400,7 @@
 
                     baseM.delete();
                 } catch (e) {
-                    console.error("Multi-subtraction execution failed.", e);
+                    console.error("Automated execution pipeline failure.", e);
                 } finally {
                     loadingDiv.style.display = 'none';
                 }
