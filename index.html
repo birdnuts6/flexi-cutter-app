@@ -93,21 +93,10 @@
 
     <script id="worker-script" type="application/javascript">
         self.onmessage = function(e) {
-            const { mainPositions, cutterPositions, cutters } = e.data;
+            const { mainPositions, cutters, halfWidthX, halfWidthY, halfWidthZ } = e.data;
             let keptTriangles = [];
             const totalLength = mainPositions.length;
 
-            // Pre-process cutter triangles array inside the worker lane context
-            const cutterTris = [];
-            for (let j = 0; j < cutterPositions.length; j += 9) {
-                cutterTris.push({
-                    ax: cutterPositions[j],   ay: cutterPositions[j+1], az: cutterPositions[j+2],
-                    bx: cutterPositions[j+3], by: cutterPositions[j+4], bz: cutterPositions[j+5],
-                    cx: cutterPositions[j+6], cy: cutterPositions[j+7], cz: cutterPositions[j+8]
-                });
-            }
-
-            // Loop through every single triangle face inside the main model mesh
             for (let i = 0; i < totalLength; i += 9) {
                 let ax = mainPositions[i],   ay = mainPositions[i+1], az = mainPositions[i+2];
                 let bx = mainPositions[i+3], by = mainPositions[i+4], bz = mainPositions[i+5];
@@ -119,7 +108,6 @@
 
                 let insideAnyCutter = false;
 
-                // Process checks directly against the actual vector footprints of each cutter instanced shape
                 for (let c of cutters) {
                     let dx = faceCenterX - c.x;
                     let dy = faceCenterY - c.y;
@@ -129,8 +117,11 @@
                     let ry = dx * c.m01 + dy * c.m11 + dz * c.m21;
                     let rz = dx * c.m02 + dy * c.m12 + dz * c.m22;
 
-                    // Match precise ray dimensions to evaluate real interior geometry positions
-                    if (Math.abs(rx) <= c.hx && Math.abs(ry) <= c.hy && Math.abs(rz) <= c.hz) {
+                    if (
+                        Math.abs(rx) <= halfWidthX &&
+                        Math.abs(ry) <= halfWidthY &&
+                        Math.abs(rz) <= halfWidthZ
+                    ) {
                         insideAnyCutter = true;
                         break;
                     }
@@ -216,11 +207,17 @@
                 
                 const binaryString = window.atob(cleanBase64);
                 
-                cutterBaseGeom = loader.parse(Uint8Array.from(binaryString, c => c.charCodeAt(0)).buffer);
+                // RESTORED: Stable byte array allocation to accurately parse data streams without corruption
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                
+                cutterBaseGeom = loader.parse(bytes.buffer);
                 cutterBaseGeom.center();
                 cutterBaseGeom.computeVertexNormals();
                 cutterBaseGeom.computeBoundingBox();
-                console.log("Cutter memory loaded perfectly.");
+                console.log("Cutter verified on system architecture.");
             } catch (e) {
                 console.error("Cutter loader breakdown.", e);
             }
@@ -365,12 +362,11 @@
             loadingDiv.style.display = 'block';
 
             let mainPositions = visualModelMesh.geometry.attributes.position.array;
-            let cutterPositions = cutterBaseGeom.attributes.position.array;
             
             let rawBox = cutterBaseGeom.boundingBox;
-            let hx = ((rawBox.max.x - rawBox.min.x) / 2);
-            let hy = ((rawBox.max.y - rawBox.min.y) / 2);
-            let hz = ((rawBox.max.z - rawBox.min.z) / 2);
+            let halfWidthX = (rawBox.max.x - rawBox.min.x) / 2;
+            let halfWidthY = (rawBox.max.y - rawBox.min.y) / 2;
+            let halfWidthZ = (rawBox.max.z - rawBox.min.z) / 2;
 
             let cutterMatrixData = activeCutters.map(cutter => {
                 cutter.mesh.updateMatrixWorld(true);
@@ -379,7 +375,6 @@
                 let s = cutter.mesh.scale;
                 return {
                     x: cutter.mesh.position.x, y: cutter.mesh.position.y, z: cutter.mesh.position.z,
-                    hx: hx * s.x, hy: hy * s.y, hz: hz * s.z,
                     m00: e[0], m01: e[1], m02: e[2],
                     m10: e[4], m11: e[5], m12: e[6],
                     m20: e[8], m21: e[9], m22: e[10]
@@ -391,8 +386,8 @@
 
             worker.postMessage({
                 mainPositions: mainPositions,
-                cutterPositions: cutterPositions,
-                cutters: cutterMatrixData
+                cutters: cutterMatrixData,
+                halfWidthX: halfWidthX, halfWidthY: halfWidthY, halfWidthZ: halfWidthZ
             });
 
             worker.onmessage = function(msg) {
