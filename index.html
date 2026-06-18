@@ -59,16 +59,12 @@
         {
             "imports": {
                 "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
-                "manifold-3d": "https://unpkg.com/manifold-3d@3.0.1/manifold.js"
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
             }
         }
     </script>
-    <script>
-        const script = document.createElement('script');
-        script.src = `./cutter-data.js?v=${Date.now()}`;
-        document.head.appendChild(script);
-    </script>
+    <script src="https://unpkg.com/@rexxars/three-csg@1.0.0/dist/three-csg.js"></script>
+    <script src="./cutter-data.js"></script>
 </head>
 <body>
 
@@ -98,13 +94,11 @@
         import { STLLoader } from 'three/addons/loaders/STLLoader.js';
         import { STLExporter } from 'three/addons/exporters/STLExporter.js';
         import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
-        import libmanifold from 'manifold-3d';
 
         let scene, camera, renderer, controls;
         let mainModelGeom = null;
         let cutterBaseGeom = null; 
         let visualModelMesh = null;
-        let wasmModule;
 
         let activeCutters = [];
         let cutterIdCounter = 0;
@@ -121,12 +115,6 @@
             requestAnimationFrame(animate);
             if (controls) controls.update();
             if (renderer && scene && camera) renderer.render(scene, camera);
-        }
-
-        async function startEngine() {
-            wasmModule = await libmanifold();
-            wasmModule.setup();
-            initThree();
         }
 
         function initThree() {
@@ -149,7 +137,7 @@
             dLight.position.set(1, 1, 1);
             scene.add(dLight);
 
-            setTimeout(loadCutterFromMemory, 100);
+            loadCutterFromMemory();
 
             window.addEventListener('resize', () => {
                 camera.aspect = container.clientWidth / container.clientHeight;
@@ -184,7 +172,7 @@
                 cutterBaseGeom.computeVertexNormals();
                 cutterBaseGeom.computeBoundingBox();
             } catch (e) {
-                console.error("Cutter structural compilation missing.", e);
+                console.error("Cutter compilation breakdown.", e);
             }
         }
 
@@ -323,96 +311,32 @@
         });
 
         btnCut.addEventListener('click', () => {
-            if (!mainModelGeom || activeCutters.length === 0) return;
-            loadingDiv.innerText = "Filtering & Executing Subtraction...";
+            if (!visualModelMesh || activeCutters.length === 0) return;
+            loadingDiv.innerText = "Executing Highly Forgiving Subtraction...";
             loadingDiv.style.display = 'block';
 
             setTimeout(() => {
                 try {
-                    const { Manifold, Mesh } = wasmModule;
-
-                    // ---- HIGH-PERFORMANCE MESH STERILIZER FILTER ----
-                    const toCleanMesh = (g) => {
-                        let rawPos = g.attributes.position.array;
-                        let cleanVertices = [];
-                        let cleanIndices = [];
-                        let vertexLookupMap = new Map();
-
-                        // Loop through all geometric coordinates triplet vectors
-                        for (let i = 0; i < rawPos.length; i += 9) {
-                            // Fetch triangle point matrices
-                            let ax = rawPos[i],   ay = rawPos[i+1], az = rawPos[i+2];
-                            let bx = rawPos[i+3], by = rawPos[i+4], bz = rawPos[i+5];
-                            let cx = rawPos[i+6], cy = rawPos[i+7], cz = rawPos[i+8];
-
-                            // Calculate exact surface area to intercept and drop degenerate flat faces
-                            let ux = bx - ax, uy = by - ay, uz = bz - az;
-                            let vx = cx - ax, vy = cy - ay, vz = cz - az;
-                            let crossX = uy*vz - uz*vy;
-                            let crossY = uz*vx - ux*vz;
-                            let crossZ = ux*vy - uy*vx;
-                            let areaSquared = crossX*crossX + crossY*crossY + crossZ*crossZ;
-
-                            if (areaSquared < 0.000001) continue; // Instantly skip overlapping flat line artifacts
-
-                            // Internal helper mapping loop to weld identical vector coords
-                            const addVertex = (x, y, z) => {
-                                let hashKey = `${x.toFixed(4)}_${y.toFixed(4)}_${z.toFixed(4)}`;
-                                if (vertexLookupMap.has(hashKey)) {
-                                    return vertexLookupMap.get(hashKey);
-                                }
-                                let newIdx = cleanVertices.length / 3;
-                                cleanVertices.push(x, y, z);
-                                vertexLookupMap.set(hashKey, newIdx);
-                                return newIdx;
-                            };
-
-                            let idxA = addVertex(ax, ay, az);
-                            let idxB = addVertex(bx, by, bz);
-                            let idxC = addVertex(cx, cy, cz);
-                            cleanIndices.push(idxA, idxB, idxC);
-                        }
-
-                        return new Mesh({
-                            numProp: 3,
-                            triVerts: new Uint32Array(cleanIndices),
-                            vertProperties: new Float32Array(cleanVertices)
-                        });
-                    };
-                    // ------------------------------------------------
-
-                    let baseM = new Manifold(toCleanMesh(mainModelGeom));
+                    // FIXED: Initialize clean, error-tolerant polygon matrix branches 
+                    let baseBsp = THREE.CSG.fromMesh(visualModelMesh);
 
                     for (let cutter of activeCutters) {
-                        let cutM = new Manifold(toCleanMesh(cutterBaseGeom));
+                        // Generate a temporary math mesh containing the cutter's exact scaled parameters
+                        let tempCutterMesh = new THREE.Mesh(cutterBaseGeom);
+                        tempCutterMesh.position.copy(cutter.mesh.position);
+                        tempCutterMesh.rotation.copy(cutter.mesh.rotation);
+                        tempCutterMesh.scale.copy(cutter.mesh.scale);
+                        tempCutterMesh.updateMatrixWorld(true);
 
-                        const baseScale = parseFloat(cutter.elScale.value) / 100;
-                        const mathOvershootFactor = 1.002; 
-                        const finalScale = baseScale * mathOvershootFactor;
-
-                        cutM = cutM.scale([finalScale, finalScale, finalScale]);
-                        cutM = cutM.rotate([parseFloat(cutter.elRx.value), parseFloat(cutter.elRy.value), parseFloat(cutter.elRz.value)]);
-                        
-                        const shiftX = parseFloat(cutter.elX.value) + 0.001;
-                        const shiftY = parseFloat(cutter.elY.value) + 0.001;
-                        const shiftZ = parseFloat(cutter.elZ.value) + 0.001;
-                        cutM = cutM.translate([shiftX, shiftY, shiftZ]);
-                        
-                        let tempRes = Manifold.difference(baseM, cutM);
-                        baseM.delete();
-                        cutM.delete();
-                        baseM = tempRes;
+                        let cutterBsp = THREE.CSG.fromMesh(tempCutterMesh);
+                        baseBsp = baseBsp.subtract(cutterBsp);
                     }
 
-                    const out = baseM.getMesh();
-
-                    const finalGeom = new THREE.BufferGeometry();
-                    finalGeom.setAttribute('position', new THREE.BufferAttribute(out.vertProperties, 3));
-                    finalGeom.setIndex(new THREE.BufferAttribute(out.triVerts, 1));
-                    finalGeom.computeVertexNormals();
+                    // Convert the completed subtraction matrix back into a renderable mesh
+                    let resultMesh = THREE.CSG.toMesh(baseBsp, new THREE.MeshStandardMaterial({ color: 0x4caf50, roughness: 0.4 }));
 
                     scene.remove(visualModelMesh);
-                    visualModelMesh = new THREE.Mesh(finalGeom, new THREE.MeshStandardMaterial({ color: 0x4caf50, roughness: 0.4 }));
+                    visualModelMesh = resultMesh;
                     scene.add(visualModelMesh);
 
                     const exporter = new STLExporter();
@@ -421,19 +345,25 @@
                     
                     const a = document.createElement('a');
                     a.href = URL.createObjectURL(blob);
-                    a.download = 'multi_flexi_subtracted_output.stl';
+                    a.download = 'forgiving_flexi_output.stl';
                     a.click();
 
-                    baseM.delete();
                 } catch (e) {
-                    console.error("Subtraction execution failed.", e);
+                    console.error("CSG polygon subtraction sequence breakdown.", e);
                 } finally {
                     loadingDiv.style.display = 'none';
                 }
-            }, 100);
+            }, 50);
         });
 
-        startEngine();
+        initThree();
     </script>
 </body>
 </html>
+
+
+
+
+
+
+
