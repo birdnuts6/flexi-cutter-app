@@ -63,7 +63,11 @@
             }
         }
     </script>
-    <script src="./cutter-data.js"></script>
+    <script>
+        const script = document.createElement('script');
+        script.src = `./cutter-data.js?v=${Date.now()}`;
+        document.head.appendChild(script);
+    </script>
 </head>
 <body>
 
@@ -93,7 +97,6 @@
             let keptTriangles = [];
             const totalLength = mainPositions.length;
 
-            // Highly optimized math loop running completely isolated from the browser tab UI thread
             for (let i = 0; i < totalLength; i += 9) {
                 let ax = mainPositions[i],   ay = mainPositions[i+1], az = mainPositions[i+2];
                 let bx = mainPositions[i+3], by = mainPositions[i+4], bz = mainPositions[i+5];
@@ -106,12 +109,10 @@
                 let insideAnyCutter = false;
 
                 for (let c of cutters) {
-                    // Re-calculate the spatial distance vectors inside the worker context
                     let dx = faceCenterX - c.x;
                     let dy = faceCenterY - c.y;
                     let dz = faceCenterZ - c.z;
 
-                    // Unpack matrix rotations manually using fast scalar math
                     let rx = dx * c.m00 + dy * c.m10 + dz * c.m20;
                     let ry = dx * c.m01 + dy * c.m11 + dz * c.m21;
                     let rz = dx * c.m02 + dy * c.m12 + dz * c.m22;
@@ -130,13 +131,11 @@
                     keptTriangles.push(ax, ay, az, bx, by, bz, cx, cy, cz);
                 }
 
-                // Send progress updates periodically to prevent tab hanging signs
                 if (i % 9000 === 0) {
                     self.postMessage({ type: 'progress', percent: Math.round((i / totalLength) * 100) });
                 }
             }
 
-            // Return the finished arrays back to the master page interface loop
             self.postMessage({ type: 'complete', keptTriangles: new Float32Array(keptTriangles) });
         };
     </script>
@@ -146,7 +145,6 @@
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { STLLoader } from 'three/addons/loaders/STLLoader.js';
         import { STLExporter } from 'three/addons/exporters/STLExporter.js';
-        import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
 
         let scene, camera, renderer, controls;
         let mainModelGeom = null;
@@ -208,22 +206,13 @@
                 let cleanBase64 = base64Str.replace(/[^A-Za-z0-9\+\/\=]/g, '');
                 
                 const binaryString = window.atob(cleanBase64);
-                let geometry;
-
-                if (binaryString.trim().startsWith('solid')) {
-                    geometry = loader.parse(binaryString);
-                } else {
-                    const bytes = new Uint8Array(binaryString.length);
-                    for (let i = 0; i < binaryString.length; i++) {
-                        bytes[i] = binaryString.charCodeAt(i);
-                    }
-                    geometry = loader.parse(bytes.buffer);
-                }
-
-                cutterBaseGeom = BufferGeometryUtils.mergeVertices(geometry, 0.001);
+                
+                // FIXED: Direct native parse to keep visual mesh pipeline intact
+                cutterBaseGeom = loader.parse(Uint8Array.from(binaryString, c => c.charCodeAt(0)).buffer);
                 cutterBaseGeom.center();
                 cutterBaseGeom.computeVertexNormals();
                 cutterBaseGeom.computeBoundingBox();
+                console.log("Cutter memory loaded perfectly.");
             } catch (e) {
                 console.error("Cutter loader breakdown.", e);
             }
@@ -236,8 +225,9 @@
             const colorIndex = activeCutters.length % CUTTER_COLORS.length;
             const hexColor = CUTTER_COLORS[colorIndex];
 
+            // Generated mesh using clean native base geometry link variables
             const mesh = new THREE.Mesh(cutterBaseGeom, new THREE.MeshStandardMaterial({
-                color: hexColor, transparent: true, opacity: 0.6
+                color: hexColor, transparent: true, opacity: 0.6, side: THREE.DoubleSide
             }));
             scene.add(mesh);
 
@@ -339,9 +329,8 @@
             setTimeout(async () => {
                 const buffer = await file.arrayBuffer();
                 const loader = new STLLoader();
-                let parsed = loader.parse(buffer);
+                mainModelGeom = loader.parse(buffer);
 
-                mainModelGeom = BufferGeometryUtils.mergeVertices(parsed, 0.001);
                 mainModelGeom.center();
                 mainModelGeom.computeVertexNormals();
                 mainModelGeom.computeBoundingBox();
@@ -368,16 +357,13 @@
             loadingDiv.innerText = "Background Thread Active: Processing 0%...";
             loadingDiv.style.display = 'block';
 
-            // Extract core structural variables from global mesh trackers
             let mainPositions = visualModelMesh.geometry.attributes.position.array;
             
-            cutterBaseGeom.computeBoundingBox();
             let rawBox = cutterBaseGeom.boundingBox;
             let halfWidthX = (rawBox.max.x - rawBox.min.x) / 2;
             let halfWidthY = (rawBox.max.y - rawBox.min.y) / 2;
             let halfWidthZ = (rawBox.max.z - rawBox.min.z) / 2;
 
-            // Prepare matrix calculations to hand off to worker array blocks
             let cutterMatrixData = activeCutters.map(cutter => {
                 cutter.mesh.updateMatrixWorld(true);
                 let inverse = new THREE.Matrix4().copy(cutter.mesh.matrixWorld).invert();
@@ -390,11 +376,9 @@
                 };
             });
 
-            // Initialize background Web Worker inline blob context
             const blob = new Blob([document.getElementById('worker-script').textContent], { type: 'application/javascript' });
             const worker = new Worker(URL.createObjectURL(blob));
 
-            // Ship array structures directly into background core computing lane
             worker.postMessage({
                 mainPositions: mainPositions,
                 cutters: cutterMatrixData,
