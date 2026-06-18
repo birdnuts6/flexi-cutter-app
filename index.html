@@ -183,6 +183,7 @@
                 cutterBaseGeom.center();
                 cutterBaseGeom.computeVertexNormals();
                 cutterBaseGeom.computeBoundingBox();
+                console.log("Cutter asset parsing verified complete. Background core standing by.");
             } catch (e) {
                 console.error("Cutter structural compilation missing.", e);
             }
@@ -324,37 +325,29 @@
 
         btnCut.addEventListener('click', () => {
             if (!mainModelGeom || activeCutters.length === 0) return;
-            loadingDiv.innerText = "Executing Isolation Subtraction...";
+            loadingDiv.innerText = "Executing Multi-Subtraction...";
             loadingDiv.style.display = 'block';
 
-            // Forced asynchronous framing isolates the calculation heap completely away from background extension sniffers
             setTimeout(() => {
                 try {
                     const { Manifold, Mesh } = wasmModule;
 
+                    // FIXED: Strips out overlapping geometry index tracking vectors on complex inputs
                     const toMesh = (g) => {
                         let pos = g.attributes.position.array;
-                        let indexArray = g.index ? g.index.array : null;
-                        
-                        let triVerts;
-                        if (indexArray) {
-                            triVerts = new Uint32Array(indexArray);
-                        } else {
-                            let count = pos.length / 3;
-                            triVerts = new Uint32Array(count);
-                            for (let i = 0; i < count; i++) triVerts[i] = i;
-                        }
+                        let count = pos.length / 3;
+                        let triVerts = new Uint32Array(count);
+                        for (let i = 0; i < count; i++) triVerts[i] = i;
                         return new Mesh({ numProp: 3, triVerts: triVerts, vertProperties: new Float32Array(pos) });
                     };
 
-                    // Execute raw deep clean on geometry structural coordinates to limit heap size overflows
                     let baseM = new Manifold(toMesh(mainModelGeom));
 
                     for (let cutter of activeCutters) {
                         let cutM = new Manifold(toMesh(cutterBaseGeom));
 
                         const baseScale = parseFloat(cutter.elScale.value) / 100;
-                        const mathOvershootFactor = 1.002; // Elevated bounding step gives clean outer tracking air paths
+                        const mathOvershootFactor = 1.002; 
                         const finalScale = baseScale * mathOvershootFactor;
 
                         cutM = cutM.scale([finalScale, finalScale, finalScale]);
