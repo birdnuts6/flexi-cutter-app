@@ -165,17 +165,28 @@
                 let base64Str = window.EMBEDDED_BASE64_STRING || "";
                 if (base64Str.includes(',')) base64Str = base64Str.split(',')[1];
                 let cleanBase64 = base64Str.replace(/[^A-Za-z0-9\+\/\=]/g, '');
-                const binaryString = window.atob(cleanBase64);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
-                }
                 
-                let geometry = loader.parse(bytes.buffer);
+                const binaryString = window.atob(cleanBase64);
+                let geometry;
+
+                // FIXED: Direct structural analysis loop to check if file structure is plain text ASCII or Binary
+                if (binaryString.trim().startsWith('solid')) {
+                    console.log("ASCII Text model definition intercepted. Processing text parameters...");
+                    geometry = loader.parse(binaryString);
+                } else {
+                    console.log("Standard Binary file format intercepted. Processing array block matrices...");
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let i = 0; i < binaryString.length; i++) {
+                        bytes[i] = binaryString.charCodeAt(i);
+                    }
+                    geometry = loader.parse(bytes.buffer);
+                }
+
                 cutterBaseGeom = BufferGeometryUtils.mergeVertices(geometry, 0.001);
                 cutterBaseGeom.center();
                 cutterBaseGeom.computeVertexNormals();
                 cutterBaseGeom.computeBoundingBox();
+                console.log("Cutter asset parsing verified complete. Background core standing by.");
             } catch (e) {
                 console.error("Cutter structural compilation missing.", e);
             }
@@ -344,7 +355,6 @@
                     for (let cutter of activeCutters) {
                         let cutM = new Manifold(toMesh(cutterBaseGeom));
 
-                        // FIXED: Micro-scale overshoot adjustment applied internally to clear planar surface lock conflicts
                         const baseScale = parseFloat(cutter.elScale.value) / 100;
                         const mathOvershootFactor = 1.0001; 
                         const finalScale = baseScale * mathOvershootFactor;
@@ -352,7 +362,6 @@
                         cutM = cutM.scale([finalScale, finalScale, finalScale]);
                         cutM = cutM.rotate([parseFloat(cutter.elRx.value), parseFloat(cutter.elRy.value), parseFloat(cutter.elRz.value)]);
                         
-                        // Add a micro-translation shift to prevent face alignment locking
                         const shiftX = parseFloat(cutter.elX.value) + 0.0005;
                         const shiftY = parseFloat(cutter.elY.value) + 0.0005;
                         const shiftZ = parseFloat(cutter.elZ.value) + 0.0005;
