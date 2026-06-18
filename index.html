@@ -317,23 +317,21 @@
 
             setTimeout(() => {
                 try {
-                    // FIXED: Initialize clean, error-tolerant polygon matrix branches 
-                    let baseBsp = THREE.CSG.fromMesh(visualModelMesh);
+                    // FIXED: Re-routed mapping vectors through the global uppercase namespace instance definition
+                    let baseBsp = ThreeCSG.fromMesh(visualModelMesh);
 
                     for (let cutter of activeCutters) {
-                        // Generate a temporary math mesh containing the cutter's exact scaled parameters
                         let tempCutterMesh = new THREE.Mesh(cutterBaseGeom);
                         tempCutterMesh.position.copy(cutter.mesh.position);
                         tempCutterMesh.rotation.copy(cutter.mesh.rotation);
                         tempCutterMesh.scale.copy(cutter.mesh.scale);
                         tempCutterMesh.updateMatrixWorld(true);
 
-                        let cutterBsp = THREE.CSG.fromMesh(tempCutterMesh);
+                        let cutterBsp = ThreeCSG.fromMesh(tempCutterMesh);
                         baseBsp = baseBsp.subtract(cutterBsp);
                     }
 
-                    // Convert the completed subtraction matrix back into a renderable mesh
-                    let resultMesh = THREE.CSG.toMesh(baseBsp, new THREE.MeshStandardMaterial({ color: 0x4caf50, roughness: 0.4 }));
+                    let resultMesh = ThreeCSG.toMesh(baseBsp, new THREE.MeshStandardMaterial({ color: 0x4caf50, roughness: 0.4 }));
 
                     scene.remove(visualModelMesh);
                     visualModelMesh = resultMesh;
@@ -360,10 +358,3 @@
     </script>
 </body>
 </html>
-
-
-
-
-
-
-
