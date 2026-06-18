@@ -183,7 +183,6 @@
                 cutterBaseGeom.center();
                 cutterBaseGeom.computeVertexNormals();
                 cutterBaseGeom.computeBoundingBox();
-                console.log("Cutter asset parsing verified complete.");
             } catch (e) {
                 console.error("Cutter structural compilation missing.", e);
             }
@@ -325,40 +324,67 @@
 
         btnCut.addEventListener('click', () => {
             if (!mainModelGeom || activeCutters.length === 0) return;
-            loadingDiv.innerText = "Automated Mesh Healing Active... (Please Hold)";
+            loadingDiv.innerText = "Filtering & Executing Subtraction...";
             loadingDiv.style.display = 'block';
 
             setTimeout(() => {
                 try {
                     const { Manifold, Mesh } = wasmModule;
 
-                    const toMesh = (g) => {
-                        let pos = g.attributes.position.array;
-                        let count = pos.length / 3;
-                        let triVerts = new Uint32Array(count);
-                        for (let i = 0; i < count; i++) triVerts[i] = i;
-                        return new Mesh({ numProp: 3, triVerts: triVerts, vertProperties: new Float32Array(pos) });
-                    };
+                    // ---- HIGH-PERFORMANCE MESH STERILIZER FILTER ----
+                    const toCleanMesh = (g) => {
+                        let rawPos = g.attributes.position.array;
+                        let cleanVertices = [];
+                        let cleanIndices = [];
+                        let vertexLookupMap = new Map();
 
-                    // ---- AUTOMATED PRE-FILTER MESH DOCTOR LAYER ----
-                    console.log("Starting voxelization remesh sequence...");
-                    let rawImportM = new Manifold(toMesh(mainModelGeom));
-                    
-                    // Convert raw mesh data into a clean mathematical LevelSet voxel layout to weld any overlapping walls
-                    let bounds = mainModelGeom.boundingBox;
-                    let sizeX = bounds.max.x - bounds.min.x;
-                    let voxelEdgeResolution = sizeX / 120; // 120 voxel grid step size guarantees absolute watertight manifold closure
-                    
-                    let voxelGridMatrix = wasmModule.LevelSet.fromManifold(rawImportM, voxelEdgeResolution);
-                    let baseM = voxelGridMatrix.toManifold(); // Recalculate a flawless closed hull surface skin
-                    
-                    rawImportM.delete();
-                    voxelGridMatrix.delete();
-                    console.log("Mesh pre-filter complete. Main model is now verified watertight manifold.");
+                        // Loop through all geometric coordinates triplet vectors
+                        for (let i = 0; i < rawPos.length; i += 9) {
+                            // Fetch triangle point matrices
+                            let ax = rawPos[i],   ay = rawPos[i+1], az = rawPos[i+2];
+                            let bx = rawPos[i+3], by = rawPos[i+4], bz = rawPos[i+5];
+                            let cx = rawPos[i+6], cy = rawPos[i+7], cz = rawPos[i+8];
+
+                            // Calculate exact surface area to intercept and drop degenerate flat faces
+                            let ux = bx - ax, uy = by - ay, uz = bz - az;
+                            let vx = cx - ax, vy = cy - ay, vz = cz - az;
+                            let crossX = uy*vz - uz*vy;
+                            let crossY = uz*vx - ux*vz;
+                            let crossZ = ux*vy - uy*vx;
+                            let areaSquared = crossX*crossX + crossY*crossY + crossZ*crossZ;
+
+                            if (areaSquared < 0.000001) continue; // Instantly skip overlapping flat line artifacts
+
+                            // Internal helper mapping loop to weld identical vector coords
+                            const addVertex = (x, y, z) => {
+                                let hashKey = `${x.toFixed(4)}_${y.toFixed(4)}_${z.toFixed(4)}`;
+                                if (vertexLookupMap.has(hashKey)) {
+                                    return vertexLookupMap.get(hashKey);
+                                }
+                                let newIdx = cleanVertices.length / 3;
+                                cleanVertices.push(x, y, z);
+                                vertexLookupMap.set(hashKey, newIdx);
+                                return newIdx;
+                            };
+
+                            let idxA = addVertex(ax, ay, az);
+                            let idxB = addVertex(bx, by, bz);
+                            let idxC = addVertex(cx, cy, cz);
+                            cleanIndices.push(idxA, idxB, idxC);
+                        }
+
+                        return new Mesh({
+                            numProp: 3,
+                            triVerts: new Uint32Array(cleanIndices),
+                            vertProperties: new Float32Array(cleanVertices)
+                        });
+                    };
                     // ------------------------------------------------
 
+                    let baseM = new Manifold(toCleanMesh(mainModelGeom));
+
                     for (let cutter of activeCutters) {
-                        let cutM = new Manifold(toMesh(cutterBaseGeom));
+                        let cutM = new Manifold(toCleanMesh(cutterBaseGeom));
 
                         const baseScale = parseFloat(cutter.elScale.value) / 100;
                         const mathOvershootFactor = 1.002; 
@@ -400,7 +426,7 @@
 
                     baseM.delete();
                 } catch (e) {
-                    console.error("Automated execution pipeline failure.", e);
+                    console.error("Subtraction execution failed.", e);
                 } finally {
                     loadingDiv.style.display = 'none';
                 }
