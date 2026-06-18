@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Multi-Threaded Parametric Flexi Station</title>
+    <title>Parametric Automated Flexi-Cutter Station</title>
     <style>
         body {
             margin: 0; padding: 0;
@@ -59,7 +59,8 @@
         {
             "imports": {
                 "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "three-bvh-csg": "https://unpkg.com/three-bvh-csg@0.0.16/build/index.module.js"
             }
         }
     </script>
@@ -91,60 +92,13 @@
         <div id="loading">Initializing Engine...</div>
     </div>
 
-    <script id="worker-script" type="application/javascript">
-        self.onmessage = function(e) {
-            const { mainPositions, cutters, halfWidthX, halfWidthY, halfWidthZ } = e.data;
-            let keptTriangles = [];
-            const totalLength = mainPositions.length;
-
-            for (let i = 0; i < totalLength; i += 9) {
-                let ax = mainPositions[i],   ay = mainPositions[i+1], az = mainPositions[i+2];
-                let bx = mainPositions[i+3], by = mainPositions[i+4], bz = mainPositions[i+5];
-                let cx = mainPositions[i+6], cy = mainPositions[i+7], cz = mainPositions[i+8];
-
-                let faceCenterX = (ax + bx + cx) / 3;
-                let faceCenterY = (ay + by + cy) / 3;
-                let faceCenterZ = (az + bz + cz) / 3;
-
-                let insideAnyCutter = false;
-
-                for (let c of cutters) {
-                    let dx = faceCenterX - c.x;
-                    let dy = faceCenterY - c.y;
-                    let dz = faceCenterZ - c.z;
-
-                    let rx = dx * c.m00 + dy * c.m10 + dz * c.m20;
-                    let ry = dx * c.m01 + dy * c.m11 + dz * c.m21;
-                    let rz = dx * c.m02 + dy * c.m12 + dz * c.m22;
-
-                    if (
-                        Math.abs(rx) <= halfWidthX &&
-                        Math.abs(ry) <= halfWidthY &&
-                        Math.abs(rz) <= halfWidthZ
-                    ) {
-                        insideAnyCutter = true;
-                        break;
-                    }
-                }
-
-                if (!insideAnyCutter) {
-                    keptTriangles.push(ax, ay, az, bx, by, bz, cx, cy, cz);
-                }
-
-                if (i % 9000 === 0) {
-                    self.postMessage({ type: 'progress', percent: Math.round((i / totalLength) * 100) });
-                }
-            }
-
-            self.postMessage({ type: 'complete', keptTriangles: new Float32Array(keptTriangles) });
-        };
-    </script>
-
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { STLLoader } from 'three/addons/loaders/STLLoader.js';
         import { STLExporter } from 'three/addons/exporters/STLExporter.js';
+        import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+        import { CSG } from 'three-bvh-csg';
 
         let scene, camera, renderer, controls;
         let mainModelGeom = null;
@@ -206,8 +160,6 @@
                 let cleanBase64 = base64Str.replace(/[^A-Za-z0-9\+\/\=]/g, '');
                 
                 const binaryString = window.atob(cleanBase64);
-                
-                // RESTORED: Stable byte array allocation to accurately parse data streams without corruption
                 const bytes = new Uint8Array(binaryString.length);
                 for (let i = 0; i < binaryString.length; i++) {
                     bytes[i] = binaryString.charCodeAt(i);
@@ -217,9 +169,9 @@
                 cutterBaseGeom.center();
                 cutterBaseGeom.computeVertexNormals();
                 cutterBaseGeom.computeBoundingBox();
-                console.log("Cutter verified on system architecture.");
+                console.log("Detailed Cutter Geometry completely parsed.");
             } catch (e) {
-                console.error("Cutter loader breakdown.", e);
+                console.error("Cutter compilation breakdown.", e);
             }
         }
 
@@ -358,50 +310,30 @@
 
         btnCut.addEventListener('click', () => {
             if (!visualModelMesh || activeCutters.length === 0) return;
-            loadingDiv.innerText = "Background Thread Active: Processing 0%...";
+            loadingDiv.innerText = "Executing Direct Solid Subtraction...";
             loadingDiv.style.display = 'block';
 
-            let mainPositions = visualModelMesh.geometry.attributes.position.array;
-            
-            let rawBox = cutterBaseGeom.boundingBox;
-            let halfWidthX = (rawBox.max.x - rawBox.min.x) / 2;
-            let halfWidthY = (rawBox.max.y - rawBox.min.y) / 2;
-            let halfWidthZ = (rawBox.max.z - rawBox.min.z) / 2;
+            setTimeout(() => {
+                try {
+                    // Initialize the ultra-fast modern BVH CSG evaluator matrix
+                    let evaluator = new CSG();
+                    
+                    // Convert main model mesh directly into a solid tracking object
+                    visualModelMesh.updateMatrixWorld(true);
+                    let resultMesh = visualModelMesh.clone();
 
-            let cutterMatrixData = activeCutters.map(cutter => {
-                cutter.mesh.updateMatrixWorld(true);
-                let inverse = new THREE.Matrix4().copy(cutter.mesh.matrixWorld).invert();
-                let e = inverse.elements;
-                let s = cutter.mesh.scale;
-                return {
-                    x: cutter.mesh.position.x, y: cutter.mesh.position.y, z: cutter.mesh.position.z,
-                    m00: e[0], m01: e[1], m02: e[2],
-                    m10: e[4], m11: e[5], m12: e[6],
-                    m20: e[8], m21: e[9], m22: e[10]
-                };
-            });
+                    for (let cutter of activeCutters) {
+                        cutter.mesh.updateMatrixWorld(true);
+                        
+                        // Execute high-speed native solid polygon difference calculation
+                        resultMesh = evaluator.evaluate(resultMesh, cutter.mesh, 'SUBTRACT');
+                    }
 
-            const blob = new Blob([document.getElementById('worker-script').textContent], { type: 'application/javascript' });
-            const worker = new Worker(URL.createObjectURL(blob));
-
-            worker.postMessage({
-                mainPositions: mainPositions,
-                cutters: cutterMatrixData,
-                halfWidthX: halfWidthX, halfWidthY: halfWidthY, halfWidthZ: halfWidthZ
-            });
-
-            worker.onmessage = function(msg) {
-                if (msg.data.type === 'progress') {
-                    loadingDiv.innerText = `Background Thread Active: Processing ${msg.data.percent}%...`;
-                } else if (msg.data.type === 'complete') {
-                    const { keptTriangles } = msg.data;
-
-                    const finalGeom = new THREE.BufferGeometry();
-                    finalGeom.setAttribute('position', new THREE.Float32BufferAttribute(keptTriangles, 3));
-                    finalGeom.computeVertexNormals();
-
+                    // Apply updated structural textures and re-render visual mesh
+                    resultMesh.material = new THREE.MeshStandardMaterial({ color: 0x4caf50, roughness: 0.4 });
+                    
                     scene.remove(visualModelMesh);
-                    visualModelMesh = new THREE.Mesh(finalGeom, new THREE.MeshStandardMaterial({ color: 0x4caf50, roughness: 0.4 }));
+                    visualModelMesh = resultMesh;
                     scene.add(visualModelMesh);
 
                     const exporter = new STLExporter();
@@ -410,13 +342,15 @@
                     
                     const a = document.createElement('a');
                     a.href = URL.createObjectURL(downloadBlob);
-                    a.download = 'multi_threaded_flexi_output.stl';
+                    a.download = 'perfect_flexi_output.stl';
                     a.click();
 
-                    worker.terminate();
+                } catch (e) {
+                    console.error("Solid subtraction sequence breakdown.", e);
+                } finally {
                     loadingDiv.style.display = 'none';
                 }
-            };
+            }, 50);
         });
 
         initThree();
